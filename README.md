@@ -1,161 +1,153 @@
-# python-template
+# quant-api-gateway
 
-> Universal Python project template — uv-native, Docker-ready, AI-agent enabled.
+> Central Aggregator Service for the Quant Trading System.
 
-[![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
-[![Docker Publish](https://github.com/OWNER/REPO/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/docker-publish.yml)
-[![Security Scan](https://github.com/OWNER/REPO/actions/workflows/security.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/security.yml)
+[![CI](https://github.com/lumduan/quant-api-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/lumduan/quant-api-gateway/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A fork-ready Python project template with dependency management via [uv](https://docs.astral.sh/uv/),
-Docker support for containerized execution, CI/CD workflows, and a `.claude/`
-directory that AI coding agents use for project context and standards.
+`quant-api-gateway` ingests Daily Performance reports from every Strategy
+Service (currently `quant-csm-set`), computes weighted return and combined
+drawdown across strategies, caches the result in Redis, and exposes a
+versioned REST API that the React Dashboard and any other client can read
+from.
 
-## Features
+The service runs as a FastAPI container on the shared Docker network
+`quant-network`, alongside the [`quant-infra-db`](https://github.com/lumduan/quant-infra-db)
+stack (`quant-postgres`, `quant-mongo`, `quant-redis`).
 
-- **uv-native** — single `pyproject.toml` as the source of truth.
-- **Docker** — multi-stage build with `uv`, Python 3.11-slim, ready to deploy.
-- **Type-safe** — `mypy --strict` on all source and test code.
-- **Linted & formatted** — `ruff` with E, F, I, UP, B, SIM rules.
-- **≥80% coverage** — `pytest` + `pytest-asyncio` + `pytest-cov` enforced in CI.
-- **Security scanning** — weekly `bandit` and `pip-audit` runs.
-- **Pre-commit hooks** — ruff-check, ruff-format, mypy on every commit.
-- **AI agent ready** — `.claude/` directory with knowledge, playbooks, and prompt
-  engineering guidance.
+Current status: **Phase 1 — Project Bootstrap complete.** Phase 1 ships the
+FastAPI skeleton, `/health` endpoint, validated settings, and the Docker
+Compose stack. See [`docs/plans/ROADMAP.md`](docs/plans/ROADMAP.md) for the
+seven-phase build-out.
 
-## Directory structure
+## Endpoints (Phase 1)
 
-```
-.
-├── .claude/                       # AI agent context & playbooks
-│   ├── knowledge/project-skill.md # Master rules for all code
-│   ├── playbooks/                 # Step-by-step workflow guides
-│   └── prompts/                   # Prompt engineering instructions
-├── .github/                       # CI/CD, issue/PR templates
-│   ├── workflows/                 # ci.yml, docker-publish.yml, security.yml
-│   ├── ISSUE_TEMPLATE/
-│   ├── PULL_REQUEST_TEMPLATE.md
-│   └── FUNDING.yml
-├── src/                           # Application source
-│   └── main.py                    # Entrypoint
-├── tests/                         # Test suite
-├── docs/                          # Documentation
-├── Dockerfile                     # Multi-stage container build
-├── pyproject.toml                 # uv project config + tool settings
-├── uv.lock                        # Locked dependency versions
-├── .pre-commit-config.yaml
-├── .env.example
-├── CHANGELOG.md
-├── CODE_OF_CONDUCT.md
-├── CONTRIBUTING.md
-├── LICENSE
-└── SECURITY.md
-```
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/health` | Liveness probe — returns `{"status": "ok"}` |
+| GET | `/docs` | Swagger UI (auto-generated) |
+| GET | `/redoc` | ReDoc (auto-generated) |
+| GET | `/openapi.json` | OpenAPI 3.1 schema |
+
+Later phases add `/api/v1/ingest/daily-report`, `/api/v1/overall-performance`,
+`/api/v1/strategies/...`, `/api/v1/portfolio/...`.
 
 ## Prerequisites
 
 - Python 3.11 or 3.12
-- [uv](https://docs.astral.sh/uv/) (install with `curl -LsSf https://astral.sh/uv/install.sh | sh`)
+- [uv](https://docs.astral.sh/uv/) — `curl -LsSf https://astral.sh/uv/install.sh | sh`
+- Docker + Docker Compose v2
 
 ## Installation
 
 ```bash
-git clone https://github.com/OWNER/REPO.git
-cd REPO
+git clone https://github.com/lumduan/quant-api-gateway.git
+cd quant-api-gateway
 
-# Install all dependencies (dev group included by default)
 uv sync --all-groups
-
-# Install pre-commit hooks
 uv run pre-commit install
+
+cp .env.example .env   # fill in real values
 ```
 
 ## Running locally
 
 ```bash
-uv run python -m src.main
-# Output: hello from python-template
+uv run uvicorn src.main:app --reload
+# → http://localhost:8000/health → {"status":"ok"}
+# → http://localhost:8000/docs
 ```
 
-## Running with Docker
+## Running on `quant-network` via Docker Compose
+
+The Compose stack joins the **external** Docker network `quant-network`. If
+the network does not exist yet (i.e. `quant-infra-db` has not been brought
+up first), create it once:
 
 ```bash
-# Build
-docker build -t python-template:dev .
-
-# Run
-docker run --rm python-template:dev
-# Output: hello from python-template
+docker network create quant-network 2>/dev/null || true
 ```
 
-## Testing
+Then:
 
 ```bash
-# Run all tests
-uv run pytest
+docker compose up -d
+docker compose ps          # quant-api-gateway and quant-redis → (healthy)
+curl -s localhost:8000/health
+docker compose down
+```
 
-# With verbosity and coverage
+The gateway listens on container port `8000` and publishes to **host port
+`${API_GATEWAY_HOST_PORT}`** (default `8000`). If another service on the
+host already binds `:8000` — e.g. the upstream `quant-csm-set` Strategy
+Service — set a different value in your `.env`:
+
+```env
+API_GATEWAY_HOST_PORT=8080
+```
+
+…and curl `localhost:8080/health` instead. The container-side port and
+all in-network communication are unaffected.
+
+Inside `quant-network`, the gateway and redis are reachable by hostname
+(`quant-api-gateway:8000`, `quant-redis:6379`).
+
+## Quality gate
+
+All four checks must pass before any commit:
+
+```bash
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src tests
 uv run pytest -v --cov=src --cov-report=term-missing
 ```
 
-Coverage must stay ≥80%. The threshold is enforced in CI and in `pyproject.toml`
-(`tool.pytest.ini_options.addopts`).
-
-## Linting, formatting, and type checking
-
-```bash
-uv run ruff check .               # Lint
-uv run ruff format --check .      # Format check (passive)
-uv run ruff format .              # Auto-format (apply)
-uv run mypy src tests             # Type check
-```
-
-Run all quality gates together:
+Or combined:
 
 ```bash
 uv run ruff check . && uv run ruff format --check . && uv run mypy src tests && uv run pytest
 ```
 
-## Using `.claude/` for AI agent workflows
-
-This project is designed to work with AI coding agents like Claude Code.
-The `.claude/` directory provides agents with project context and enforceable
-standards:
-
-| File | Purpose |
-|------|---------|
-| `.claude/knowledge/project-skill.md` | **Start here.** Hard rules, soft conventions, and quality gates. Agents load this first. |
-| `.claude/playbooks/feature-development.md` | Repeatable 8-step workflow: read → design → test-first → implement → quality gate → document → commit → verify. |
-| `.claude/prompts/Prompt-Engineer.prompt.md` | How to write effective prompts for AI agents on this project. Includes good and bad examples. |
-
-When you open this repo in Claude Code (or any agent that reads `.claude/`),
-the agent will automatically pick up these files. You can also ask it explicitly:
-> *"Read `.claude/knowledge/project-skill.md` and then follow
-> `.claude/playbooks/feature-development.md` to add a new feature."*
+Coverage gate: **≥80% global** (enforced by `pyproject.toml` and CI). Phase
+1 currently lands at **100%**.
 
 ## Security scanning
 
 ```bash
-# Static analysis for common Python security issues
 uv run bandit -r src
-
-# Check dependencies for known CVEs
 uv run pip-audit
 ```
 
-Both run automatically on a weekly CI schedule (`.github/workflows/security.yml`).
+Both run automatically on a weekly CI schedule
+(`.github/workflows/security.yml`).
+
+## Working with AI agents (`.claude/`)
+
+This repository is set up for AI coding agents (Claude Code, Cursor, etc.):
+
+| File | Purpose |
+|---|---|
+| `.claude/knowledge/project-skill.md` | **Start here.** Hard rules and quality gates. |
+| `.claude/knowledge/architecture.md` | Module boundaries and data flow. |
+| `.claude/knowledge/coding-standards.md` | Naming, typing, docstrings, async. |
+| `.claude/knowledge/commands.md` | Full command reference. |
+| `.claude/knowledge/stack-decisions.md` | Why each tool was chosen. |
+| `.claude/playbooks/feature-development.md` | 8-step feature workflow. |
+| `docs/plans/ROADMAP.md` | Phased build-out (currently the source of truth). |
+| `docs/plans/phase_*/` | Per-phase implementation plans. |
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full contribution guide,
-conventional commit format, and quality gate expectations. Pull requests are
-welcome — use the PR template to provide context.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md). All commits use
+[Conventional Commits](https://www.conventionalcommits.org/) (`feat:`,
+`fix:`, `docs:`, `chore:`, `refactor:`).
 
 ## Security
 
-Report vulnerabilities privately to **bad.sonsuk@gmail.com** rather than
-opening a public issue. See [SECURITY.md](SECURITY.md) for the full policy.
+Report vulnerabilities privately to **bad.sonsuk@gmail.com**. See
+[`SECURITY.md`](SECURITY.md).
 
 ## License
 
-MIT — see [LICENSE](LICENSE) for details.
+MIT — see [`LICENSE`](LICENSE).

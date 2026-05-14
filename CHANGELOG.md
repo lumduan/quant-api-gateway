@@ -9,7 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 1 — Project Bootstrap.** Replaces the `python-template` skeleton with the `quant-api-gateway` FastAPI service:
+  - `src/main.py` — FastAPI app with an async `lifespan`, root-level `GET /health → {"status":"ok"}`, and a v1 router mounted under `/api/v1` as the future home of ingest/performance/strategies/portfolio sub-routers.
+  - `src/config.py` — `Settings` model (Pydantic Settings) covering `POSTGRES_DSN`, `MONGO_URI`, `REDIS_URL`, `CSM_SET_SERVICE_URL`, `INTERNAL_API_KEY`, `LOG_LEVEL`; cached accessor `get_settings()`.
+  - `src/api/v1/router.py` — empty `APIRouter` stub for the v1 mount point.
+  - `docker-compose.yml` — `quant-api-gateway` + `quant-redis` services on the external Docker network `quant-network`, with healthchecks for both.
+  - `Dockerfile` rewritten for `python:3.12-slim`, uv-native multi-stage build, `curl` installed in the runtime stage for the Compose healthcheck, `uvicorn` CMD on port 8000.
+  - `.env.example` — gateway-specific environment template.
+  - Tests: 12 tests (`tests/test_main.py`, `tests/test_config.py`, `tests/api/v1/test_router.py`) covering app metadata, `/health` integration, OpenAPI generation, Settings validation, and the `lifespan` startup/shutdown branches. Coverage: **100%**.
+  - `docs/plans/phase_1_bootstrap/phase_1_bootstrap.md` — Phase 1 implementation plan.
 - Initial roadmap document for the `quant-api-gateway` service at `docs/plans/ROADMAP.md` — covers Phases 1–7 (Bootstrap, Data Models, Ingestion, Aggregation, Caching, REST API, Operations) with task checklists, exit criteria, code snippets, dependency map, and external project dependencies.
+
+### Changed
+
+- Project renamed in `pyproject.toml` from `python-template` to `quant-api-gateway`; runtime dependencies added (`fastapi`, `uvicorn[standard]`, `asyncpg`, `motor`, `redis[asyncio]`, `pydantic`, `pydantic-settings`, `httpx`).
+- `README.md` rewritten for the new project (overview, endpoints, prerequisites, local run, Docker Compose run, quality gate, `.claude/` agent map).
 
 ### Security
 

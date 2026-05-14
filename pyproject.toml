@@ -1,12 +1,12 @@
 [project]
-name = "python-template"
+name = "quant-api-gateway"
 version = "0.1.0"
-description = "Universal Python project template — uv-native, Docker-ready, AI-agent enabled."
+description = "Central Aggregator Service for the Quant Trading System — ingests Daily Performance reports from Strategy Services, computes weighted return and combined drawdown, caches in Redis, and exposes a versioned REST API."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
 authors = [{ name = "lumduan", email = "bad.sonsuk@gmail.com" }]
-keywords = ["python", "template", "uv", "docker", "claude-code"]
+keywords = ["quant", "trading", "fastapi", "aggregator", "gateway", "uv", "docker"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -14,7 +14,16 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
-dependencies = []
+dependencies = [
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.29",
+    "asyncpg>=0.29",
+    "motor>=3.4",
+    "redis[asyncio]>=5.0",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.2",
+    "httpx>=0.27",
+]
 
 [dependency-groups]
 dev = [
