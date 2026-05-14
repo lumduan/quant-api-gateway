@@ -77,8 +77,20 @@ curl -s localhost:8000/health
 docker compose down
 ```
 
+The gateway listens on container port `8000` and publishes to **host port
+`${API_GATEWAY_HOST_PORT}`** (default `8000`). If another service on the
+host already binds `:8000` — e.g. the upstream `quant-csm-set` Strategy
+Service — set a different value in your `.env`:
+
+```env
+API_GATEWAY_HOST_PORT=8080
+```
+
+…and curl `localhost:8080/health` instead. The container-side port and
+all in-network communication are unaffected.
+
 Inside `quant-network`, the gateway and redis are reachable by hostname
-(`quant-api-gateway`, `quant-redis`).
+(`quant-api-gateway:8000`, `quant-redis:6379`).
 
 ## Quality gate
 
