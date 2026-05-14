@@ -24,17 +24,19 @@ upstream Strategy Service for ingestion.
 
 ---
 
-## Phase 1 — Project Bootstrap 🏗️
+## Phase 1 — Project Bootstrap 🏗️ ✅ (completed 2026-05-14)
 
 > **Goal:** Stand up the FastAPI project skeleton with Docker Compose so that
 > `docker compose up -d` works on a fresh clone, the container joins
 > `quant-network`, and `GET /health` returns `200 OK`.
 
+**Status:** Complete. See [`phase_1_bootstrap/phase_1_bootstrap.md`](phase_1_bootstrap/phase_1_bootstrap.md) for the implementation plan and post-implementation notes.
+
 ### 1.1 Project structure
 
-- [ ] Create the project folder `quant-api-gateway/`
-- [ ] Create `README.md` describing the overview, setup steps, and API endpoints
-- [ ] Create `.env.example`:
+- [x] Create the project folder `quant-api-gateway/`
+- [x] Create `README.md` describing the overview, setup steps, and API endpoints
+- [x] Create `.env.example`:
   ```env
   POSTGRES_DSN=postgresql://postgres:<pass>@quant-postgres:5432/db_gateway
   MONGO_URI=mongodb://quant-mongo:27017/
@@ -43,10 +45,10 @@ upstream Strategy Service for ingestion.
   INTERNAL_API_KEY=your_strong_internal_key_here
   LOG_LEVEL=INFO
   ```
-- [ ] Create `.gitignore`:
+- [x] Create `.gitignore`:
   - Do not commit the real `.env`
   - Do not commit `__pycache__/`, `.pytest_cache/`, `.mypy_cache/`
-- [ ] Create `pyproject.toml` with the core dependencies:
+- [x] Create `pyproject.toml` with the core dependencies:
   ```toml
   [project]
   name = "quant-api-gateway"
@@ -78,7 +80,7 @@ present in the repository.
 
 ### 1.2 FastAPI application bootstrap
 
-- [ ] Create `src/main.py` — FastAPI app instance with an async lifespan:
+- [x] Create `src/main.py` — FastAPI app instance with an async lifespan:
   ```python
   from contextlib import asynccontextmanager
   from collections.abc import AsyncIterator
@@ -102,7 +104,7 @@ present in the repository.
       lifespan=lifespan,
   )
   ```
-- [ ] Create `src/config.py` — Pydantic Settings:
+- [x] Create `src/config.py` — Pydantic Settings:
   ```python
   from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -120,10 +122,10 @@ present in the repository.
 
   settings = Settings()  # type: ignore[call-arg]
   ```
-- [ ] Create `src/api/v1/router.py` — top-level router that mounts every
+- [x] Create `src/api/v1/router.py` — top-level router that mounts every
   sub-router (ingest, performance, strategies, portfolio)
-- [ ] Endpoint: `GET /health` → `{"status": "ok"}`
-- [ ] Verify locally:
+- [x] Endpoint: `GET /health` → `{"status": "ok"}`
+- [x] Verify locally:
   ```bash
   uv run uvicorn src.main:app --reload
   curl -s localhost:8000/health   # → {"status":"ok"}
@@ -133,7 +135,7 @@ present in the repository.
 
 ### 1.3 Docker Compose on `quant-network`
 
-- [ ] Create `Dockerfile` (uv-native, Python 3.12-slim):
+- [x] Create `Dockerfile` (uv-native, Python 3.12-slim):
   ```dockerfile
   FROM python:3.12-slim
   WORKDIR /app
@@ -147,7 +149,7 @@ present in the repository.
   EXPOSE 8000
   CMD ["uv", "run", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
   ```
-- [ ] Create `docker-compose.yml`:
+- [x] Create `docker-compose.yml`:
   ```yaml
   services:
     api-gateway:
@@ -189,9 +191,9 @@ present in the repository.
       name: quant-network
       external: true
   ```
-- [ ] Ensure `quant-network` exists (created once by `quant-infra-db`); if
+- [x] Ensure `quant-network` exists (created once by `quant-infra-db`); if
   not, run `docker network create quant-network`
-- [ ] Verify:
+- [x] Verify:
   ```bash
   docker compose up -d
   docker compose ps      # api-gateway + redis both (healthy)
@@ -849,10 +851,10 @@ extra configuration:
 > Update this section as each phase completes.
 
 - **Active phase:** —
-- **Completed phases:** —
+- **Completed phases:** Phase 1 — Project Bootstrap (2026-05-14)
 - **Blocked by:** `quant-infra-db` must be running on `quant-network` before
   Phase 2 can begin
-- **Next:** Phase 1 — Project Bootstrap
+- **Next:** Phase 2 — Data Models & Schema Validation
 
 ---
 
