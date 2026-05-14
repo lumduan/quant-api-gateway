@@ -21,6 +21,7 @@ RUN apt-get update \
 
 COPY --from=builder /opt/venv /opt/venv
 COPY src/ ./src/
+COPY strategies.json ./strategies.json
 
 ENV PYTHONPATH=/app \
     VIRTUAL_ENV=/opt/venv \

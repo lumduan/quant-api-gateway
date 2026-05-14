@@ -7,6 +7,7 @@ the first read.
 """
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -61,6 +62,13 @@ class Settings(BaseSettings):
     log_level: str = Field(
         default="INFO",
         description=("Python ``logging`` level name (e.g. ``DEBUG``, ``INFO``, ``WARNING``)."),
+    )
+    strategy_registry_path: Path = Field(
+        default=Path("strategies.json"),
+        description=(
+            "Filesystem path to the strategy registry JSON file loaded at startup. "
+            "Relative paths are resolved against the working directory."
+        ),
     )
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

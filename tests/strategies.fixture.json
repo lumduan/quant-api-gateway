@@ -1,0 +1,25 @@
+{
+  "strategies": [
+    {
+      "id": "csm-set-01",
+      "name": "CSM SET Strategy",
+      "service_url": "http://quant-csm-set:8001",
+      "capital_weight": 0.6,
+      "active": true
+    },
+    {
+      "id": "tfex-01",
+      "name": "TFEX Test Strategy",
+      "service_url": "http://quant-tfex:8002",
+      "capital_weight": 0.4,
+      "active": true
+    },
+    {
+      "id": "legacy-00",
+      "name": "Legacy disabled strategy",
+      "service_url": "http://quant-legacy:8000",
+      "capital_weight": 0.0,
+      "active": false
+    }
+  ]
+}

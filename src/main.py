@@ -17,6 +17,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from src.api.v1.router import api_router
+from src.config import get_settings
+from src.db.postgres import close_pool, get_pool
+from src.services import strategy_registry
 
 logger = logging.getLogger(__name__)
 
@@ -25,28 +28,26 @@ logger = logging.getLogger(__name__)
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Manage application startup and shutdown.
 
-    Phase 1 has no I/O resources to open; later phases open the asyncpg
-    pool, motor client, Redis connection, and shared ``httpx.AsyncClient``
-    here.
-
-    Args:
-        _app: The :class:`fastapi.FastAPI` instance. Unused in Phase 1 but
-            retained for the lifespan-handler signature FastAPI expects.
+    Loads the strategy registry from ``strategies.json`` (path configurable via
+    ``Settings.strategy_registry_path``) and opens the asyncpg pool eagerly so
+    the first ingestion request does not pay first-call latency. Mongo and
+    Redis stay lazy until later phases need them.
 
     Yields:
-        Control to the running application. The generator resumes on
-        shutdown to release resources opened during startup.
-
-    Example:
-        >>> from fastapi import FastAPI
-        >>> from src.main import lifespan
-        >>> app = FastAPI(lifespan=lifespan)
+        Control to the running application. The generator resumes on shutdown
+        to release the pool and clear the in-memory registry.
     """
     logger.info("quant-api-gateway starting up")
+    settings = get_settings()
+    registry = strategy_registry.load_registry(settings.strategy_registry_path)
+    strategy_registry.set_registry(registry)
+    await get_pool()
     try:
         yield
     finally:
         logger.info("quant-api-gateway shutting down")
+        await close_pool()
+        strategy_registry.clear_registry()
 
 
 app = FastAPI(

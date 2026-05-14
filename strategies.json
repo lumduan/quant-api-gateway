@@ -1,0 +1,11 @@
+{
+  "strategies": [
+    {
+      "id": "csm-set-01",
+      "name": "CSM SET Strategy",
+      "service_url": "http://quant-csm-set:8001",
+      "capital_weight": 1.0,
+      "active": true
+    }
+  ]
+}

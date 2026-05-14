@@ -1,10 +1,14 @@
 """Top-level v1 router.
 
-This router is mounted under ``/api/v1`` by :mod:`src.main`. Later phases
-attach sub-routers (ingest, performance, strategies, portfolio) to it as
-they are implemented; Phase 1 ships the empty mount point only.
+This router is mounted under ``/api/v1`` by :mod:`src.main`. It re-exports
+the ingest and strategies sub-routers; performance / portfolio land in
+later phases.
 """
 
 from fastapi import APIRouter
 
+from src.api.v1 import ingest, strategies
+
 api_router = APIRouter()
+api_router.include_router(ingest.router)
+api_router.include_router(strategies.router)
