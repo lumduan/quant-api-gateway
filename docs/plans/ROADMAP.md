@@ -205,15 +205,17 @@ present in the repository.
 
 ---
 
-## Phase 2 — Data Models & Schema Validation 📐
+## Phase 2 — Data Models & Schema Validation 📐 ✅ (completed 2026-05-14)
 
 > **Goal:** Define Pydantic v2 models that exactly match the Standard JSON
 > emitted by `quant-csm-set`, so every payload entering or leaving the gateway
 > is validated at the boundary.
+>
+> **Status:** Complete. See [`phase_2_data_models/phase_2_data_models.md`](phase_2_data_models/phase_2_data_models.md) for the implementation plan and post-implementation notes.
 
 ### 2.1 Input schema (from Strategy Services)
 
-- [ ] Create `src/schemas/strategy.py`:
+- [x] Create `src/schemas/strategy.py`:
   ```python
   from datetime import datetime
 
@@ -252,7 +254,7 @@ present in the repository.
       current_exposure: CurrentExposure
       extended_data: dict[str, object] = Field(default_factory=dict)
   ```
-- [ ] Verify: a payload with missing fields → `422 Unprocessable Entity` with
+- [x] Verify: a payload with missing fields → `422 Unprocessable Entity` with
   a descriptive error body
 
 **Exit criteria:** Pydantic validates every field automatically; malformed
@@ -260,7 +262,7 @@ input is rejected at the boundary before it reaches any service logic.
 
 ### 2.2 Output schema (to the Dashboard)
 
-- [ ] Create `src/schemas/gateway.py`:
+- [x] Create `src/schemas/gateway.py`:
   ```python
   from datetime import datetime
 
@@ -285,7 +287,7 @@ input is rejected at the boundary before it reaches any service logic.
       strategies: list[StrategyPerformanceResponse]
       computed_at: datetime
   ```
-- [ ] Verify: serialized responses emit `datetime` as ISO 8601 and contain no
+- [x] Verify: serialized responses emit `datetime` as ISO 8601 and contain no
   stray fields beyond the schema
 
 **Exit criteria:** every output model is complete; every response includes a
@@ -297,7 +299,7 @@ input is rejected at the boundary before it reaches any service logic.
 > `db_gateway`, which is provisioned by `quant-infra-db`. The gateway only
 > reads from and writes to those tables — it does not own the schema.
 
-- [ ] Create `src/db/postgres.py` — asyncpg connection pool getter:
+- [x] Create `src/db/postgres.py` — asyncpg connection pool getter:
   ```python
   import asyncpg
 
@@ -320,7 +322,7 @@ input is rejected at the boundary before it reaches any service logic.
           await _pool.close()
           _pool = None
   ```
-- [ ] Create `src/db/mongo.py` — motor async client getter:
+- [x] Create `src/db/mongo.py` — motor async client getter:
   ```python
   from motor.motor_asyncio import AsyncIOMotorClient
 
@@ -343,7 +345,7 @@ input is rejected at the boundary before it reaches any service logic.
           _client.close()
           _client = None
   ```
-- [ ] Create `src/db/redis_client.py` — `redis.asyncio` connection getter:
+- [x] Create `src/db/redis_client.py` — `redis.asyncio` connection getter:
   ```python
   import redis.asyncio as aioredis
 
@@ -366,7 +368,7 @@ input is rejected at the boundary before it reaches any service logic.
           await _redis.close()
           _redis = None
   ```
-- [ ] Verify connectivity from inside the container against `quant-postgres`,
+- [x] Verify connectivity from inside the container against `quant-postgres`,
   `quant-mongo`, and `quant-redis` (all by hostname)
 
 **Exit criteria:** PostgreSQL, MongoDB, and Redis can all be reached from the
@@ -850,11 +852,11 @@ extra configuration:
 
 > Update this section as each phase completes.
 
-- **Active phase:** —
-- **Completed phases:** Phase 1 — Project Bootstrap (2026-05-14)
+- **Active phase:** Phase 3 — Strategy Ingestion & Data Storage
+- **Completed phases:** Phase 1 — Project Bootstrap (2026-05-14), Phase 2 — Data Models & Schema Validation (2026-05-14)
 - **Blocked by:** `quant-infra-db` must be running on `quant-network` before
-  Phase 2 can begin
-- **Next:** Phase 2 — Data Models & Schema Validation
+  Phase 3 integration tests can run
+- **Next:** Phase 3 — Strategy Ingestion & Data Storage
 
 ---
 
