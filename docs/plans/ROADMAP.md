@@ -376,19 +376,21 @@ FastAPI container via their `quant-network` hostnames.
 
 ---
 
-## Phase 3 — Strategy Ingestion & Data Storage 📥
+## Phase 3 — Strategy Ingestion & Data Storage 📥 ✅ (completed 2026-05-14)
 
 > **Goal:** Accept Daily Performance reports from every Strategy Service,
 > validate them, and persist them into `db_gateway`.
+>
+> **Status:** Complete. See [`phase_3_strategy_ingestion/phase_3_strategy_ingestion.md`](phase_3_strategy_ingestion/phase_3_strategy_ingestion.md) for the implementation plan and post-implementation notes.
 
 ### 3.1 Ingestion endpoint
 
-- [ ] Create `src/api/v1/ingest.py`:
+- [x] Create `src/api/v1/ingest.py`:
   - `POST /api/v1/ingest/daily-report` — Strategy Service pushes a
     `StrategyPayload`
   - Validate via the `StrategyPayload` schema
   - Insert into `daily_performance` in `db_gateway`
-- [ ] Add API-key authentication for the endpoint:
+- [x] Add API-key authentication for the endpoint:
   ```python
   from fastapi import Depends, HTTPException, status
   from fastapi.security import APIKeyHeader
@@ -406,16 +408,17 @@ FastAPI container via their `quant-network` hostnames.
               detail="Invalid API key",
           )
   ```
-- [ ] Verify: a valid `StrategyPayload` from `quant-csm-set` → `201 Created`
-  → a corresponding row appears in `daily_performance`
-- [ ] Verify: a request without `X-API-Key` → `403 Forbidden`
+- [x] Verify: a valid `StrategyPayload` from `quant-csm-set` → `201 Created`
+  → a corresponding row appears in `daily_performance` (verified via mocked
+  asyncpg pool in `tests/api/v1/test_ingest.py`)
+- [x] Verify: a request without `X-API-Key` → `403 Forbidden`
 
 **Exit criteria:** the gateway accepts `StrategyPayload` from `quant-csm-set`
 and persists rows in `daily_performance`.
 
 ### 3.2 Strategy registry
 
-- [ ] Create `src/services/strategy_registry.py` — config-driven registry
+- [x] Create `src/services/strategy_registry.py` — config-driven registry
   loaded from `strategies.json`:
   ```json
   {
@@ -430,22 +433,23 @@ and persists rows in `daily_performance`.
     ]
   }
   ```
-- [ ] Load the registry on application startup (inside `lifespan`)
-- [ ] Endpoint: `GET /api/v1/strategies` — return every active strategy
+- [x] Load the registry on application startup (inside `lifespan`)
+- [x] Endpoint: `GET /api/v1/strategies` — return every active strategy
 
 **Exit criteria:** adding a new strategy is a JSON edit; no code change
 required.
 
 ### 3.3 Portfolio snapshot writer
 
-- [ ] Create `src/services/snapshot_writer.py`:
+- [x] Create `src/services/snapshot_writer.py`:
   - Aggregate every active strategy's latest report
   - Insert a daily `portfolio_snapshot` row (total, weighted_return,
     allocation)
-- [ ] Invoke the writer after a full ingestion round (every active strategy
+- [x] Invoke the writer after a full ingestion round (every active strategy
   has reported for the day)
-- [ ] Verify: two strategies report on the same day → one new
-  `portfolio_snapshot` row with `active_strategies = 2`
+- [x] Verify: two strategies report on the same day → one new
+  `portfolio_snapshot` row with `active_strategies = 2` (verified via
+  `tests/services/test_snapshot_writer.py::test_maybe_write_snapshot_round_complete`)
 
 **Exit criteria:** `portfolio_snapshot` is updated automatically once every
 active strategy has reported.
@@ -852,11 +856,16 @@ extra configuration:
 
 > Update this section as each phase completes.
 
-- **Active phase:** Phase 3 — Strategy Ingestion & Data Storage
-- **Completed phases:** Phase 1 — Project Bootstrap (2026-05-14), Phase 2 — Data Models & Schema Validation (2026-05-14)
+- **Active phase:** Phase 4 — Aggregation Engine
+- **Completed phases:** Phase 1 — Project Bootstrap (2026-05-14), Phase 2 — Data Models & Schema Validation (2026-05-14), Phase 3 — Strategy Ingestion & Data Storage (2026-05-14)
 - **Blocked by:** `quant-infra-db` must be running on `quant-network` before
-  Phase 3 integration tests can run
-- **Next:** Phase 3 — Strategy Ingestion & Data Storage
+  the Phase 7 integration suite can hit real `db_gateway` tables (Phase 3 unit
+  tests mock the asyncpg pool, so they pass without it)
+- **Next:** Phase 4 — Aggregation Engine. Note for Phase 4: the snapshot writer in
+  Phase 3 already computes `weighted_return` and writes `combined_drawdown = NULL`;
+  Phase 4 fills in the combined drawdown via the equity-curve merger and may also
+  extend the merger formula. The raw `daily_pnl` is preserved inside
+  `daily_performance.metadata` JSONB if any alternative return definition is needed.
 
 ---
 

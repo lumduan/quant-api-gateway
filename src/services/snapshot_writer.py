@@ -1,0 +1,166 @@
+"""Write ``portfolio_snapshot`` rows when every active strategy has reported.
+
+The writer is invoked inline after each successful ingest. It is a no-op
+unless every active strategy in the registry has a ``daily_performance`` row
+for "today" (UTC date), at which point a single ``portfolio_snapshot`` row is
+upserted for that date.
+"""
+
+import json
+import logging
+from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime, time
+from decimal import Decimal
+from typing import Any
+
+import asyncpg
+
+from src.schemas.registry import StrategyConfig, StrategyRegistry
+from src.services.errors import ServiceError
+
+logger = logging.getLogger(__name__)
+
+
+_SELECT_TODAY_SQL = """
+SELECT DISTINCT ON (strategy_id)
+    strategy_id, total_value, daily_return
+FROM daily_performance
+WHERE time::date = $1 AND strategy_id = ANY($2::text[])
+ORDER BY strategy_id, time DESC
+"""
+
+_UPSERT_SQL = """
+INSERT INTO portfolio_snapshot (
+    time, total_portfolio, weighted_return, combined_drawdown,
+    active_strategies, allocation
+) VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+ON CONFLICT (time) DO UPDATE SET
+    total_portfolio = EXCLUDED.total_portfolio,
+    weighted_return = EXCLUDED.weighted_return,
+    combined_drawdown = EXCLUDED.combined_drawdown,
+    active_strategies = EXCLUDED.active_strategies,
+    allocation = EXCLUDED.allocation
+"""
+
+
+@dataclass(frozen=True)
+class SnapshotAggregates:
+    """Aggregates computed from a complete daily round."""
+
+    total_portfolio: float
+    weighted_return: float
+    combined_drawdown: float | None
+    active_strategies: int
+    allocation: dict[str, float]
+
+
+def _compute_aggregates(
+    rows: Sequence[dict[str, Any]],
+    active: Sequence[StrategyConfig],
+) -> SnapshotAggregates:
+    """Compute portfolio aggregates from the latest per-strategy daily rows.
+
+    Args:
+        rows: One row per active strategy, each with keys ``strategy_id``,
+            ``total_value``, ``daily_return``.
+        active: The active registry entries.
+
+    Returns:
+        A :class:`SnapshotAggregates` with ``combined_drawdown=None`` — the
+        full equity-curve merger lands in Phase 4.
+    """
+    weights: dict[str, Decimal] = {cfg.id: cfg.capital_weight for cfg in active}
+    total_weight = sum(weights.values(), start=Decimal(0))
+
+    rows_by_id = {row["strategy_id"]: row for row in rows}
+    total_portfolio = sum(float(rows_by_id[sid]["total_value"]) for sid in weights)
+
+    if total_weight > 0:
+        weighted_return = sum(
+            float(rows_by_id[sid]["daily_return"]) * float(weight)
+            for sid, weight in weights.items()
+            if sid in rows_by_id
+        ) / float(total_weight)
+        allocation = {sid: float(weight) / float(total_weight) for sid, weight in weights.items()}
+    else:
+        weighted_return = 0.0
+        allocation = {sid: 0.0 for sid in weights}
+
+    return SnapshotAggregates(
+        total_portfolio=total_portfolio,
+        weighted_return=weighted_return,
+        combined_drawdown=None,
+        active_strategies=len(active),
+        allocation=allocation,
+    )
+
+
+async def maybe_write_snapshot(
+    *,
+    pool: asyncpg.Pool,
+    registry: StrategyRegistry,
+    now: datetime | None = None,
+) -> bool:
+    """Write a portfolio snapshot if the current day's round is complete.
+
+    Args:
+        pool: The asyncpg pool for ``db_gateway``.
+        registry: The strategy registry (the loaded ``strategies.json``).
+        now: The current moment in UTC. Defaults to :func:`datetime.now` (UTC).
+            Tests pass a fixed value to assert on the bucketed date.
+
+    Returns:
+        ``True`` if a snapshot row was upserted; ``False`` if the round is
+        incomplete and the writer did nothing.
+
+    Raises:
+        ServiceError: If Postgres rejects the SELECT or UPSERT.
+    """
+    if now is None:
+        now = datetime.now(UTC)
+    today = now.date()
+    bucket = datetime.combine(today, time.min, tzinfo=UTC)
+
+    active = registry.active_strategies()
+    if not active:
+        logger.info("snapshot writer: registry has no active strategies; skipping")
+        return False
+    active_ids = [cfg.id for cfg in active]
+
+    try:
+        async with pool.acquire() as conn:
+            raw_rows = await conn.fetch(_SELECT_TODAY_SQL, today, active_ids)
+    except asyncpg.PostgresError as exc:
+        raise ServiceError("failed to read daily_performance for snapshot") from exc
+
+    rows = [dict(r) for r in raw_rows]
+    if len(rows) < len(active_ids):
+        logger.info(
+            "snapshot writer: round incomplete (%d/%d reported); skipping",
+            len(rows),
+            len(active_ids),
+        )
+        return False
+
+    agg = _compute_aggregates(rows, active)
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                _UPSERT_SQL,
+                bucket,
+                agg.total_portfolio,
+                agg.weighted_return,
+                agg.combined_drawdown,
+                agg.active_strategies,
+                json.dumps(agg.allocation),
+            )
+    except asyncpg.PostgresError as exc:
+        raise ServiceError("failed to upsert portfolio_snapshot") from exc
+    logger.info(
+        "portfolio_snapshot upserted time=%s total=%.2f active=%d",
+        bucket.isoformat(),
+        agg.total_portfolio,
+        agg.active_strategies,
+    )
+    return True

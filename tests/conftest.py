@@ -1,6 +1,6 @@
 """Shared pytest fixtures.
 
-Two fixtures live here:
+The fixtures here are:
 
 * :func:`set_env` — autouse fixture that injects every required environment
   variable so :func:`src.config.get_settings` can be called from anywhere
@@ -8,15 +8,26 @@ Two fixtures live here:
 * :func:`async_client` — an :class:`httpx.AsyncClient` wired to the
   FastAPI app via :class:`httpx.ASGITransport`, so tests can hit endpoints
   in-process without binding a TCP port.
+* :func:`load_test_registry` — populate ``src.services.strategy_registry``
+  with the 3-strategy fixture so router tests have a known registry.
+* :func:`mock_pool` — a fully-mocked ``asyncpg.Pool`` whose ``acquire`` /
+  ``execute`` / ``fetch`` methods are :class:`AsyncMock`s. Tests use this
+  to exercise SQL-bearing code without touching Postgres.
 """
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
+from pathlib import Path
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from src.config import get_settings
 from src.main import app
+from src.services import strategy_registry as registry_mod
+
+_FIXTURE_REGISTRY_PATH = Path(__file__).parent / "strategies.fixture.json"
 
 _TEST_ENV: dict[str, str] = {
     "POSTGRES_DSN": "postgresql://postgres:test@quant-postgres:5432/db_gateway",
@@ -25,6 +36,7 @@ _TEST_ENV: dict[str, str] = {
     "CSM_SET_SERVICE_URL": "http://quant-csm-set:8001",
     "INTERNAL_API_KEY": "test-internal-api-key",
     "LOG_LEVEL": "INFO",
+    "STRATEGY_REGISTRY_PATH": str(_FIXTURE_REGISTRY_PATH),
 }
 
 
@@ -41,6 +53,51 @@ def set_env(monkeypatch: pytest.MonkeyPatch) -> None:
     get_settings.cache_clear()
 
 
+@pytest.fixture
+def load_test_registry() -> Iterator[None]:
+    """Load the 3-strategy test fixture into the registry module-global.
+
+    Use this in router/api tests that need ``get_registry()`` to succeed.
+    """
+    reg = registry_mod.load_registry(_FIXTURE_REGISTRY_PATH)
+    registry_mod.set_registry(reg)
+    try:
+        yield
+    finally:
+        registry_mod.clear_registry()
+
+
+@pytest.fixture
+def mock_pool() -> MagicMock:
+    """Return an :class:`asyncpg.Pool`-shaped mock.
+
+    The returned object exposes:
+
+    * ``pool.acquire()`` as an async context manager yielding a connection;
+    * ``conn.execute`` / ``conn.fetch`` as :class:`AsyncMock`s (assertable);
+    * ``pool.execute`` / ``pool.fetch`` directly mocked too — both call styles
+      are supported by ``asyncpg.Pool``.
+
+    Tests can inspect call history via the standard ``mock.assert_*`` helpers.
+    """
+    conn = AsyncMock(name="asyncpg-connection")
+    conn.execute = AsyncMock(name="conn-execute")
+    conn.fetch = AsyncMock(name="conn-fetch", return_value=[])
+    conn.fetchrow = AsyncMock(name="conn-fetchrow", return_value=None)
+
+    acquire_ctx = AsyncMock(name="acquire-ctx")
+    acquire_ctx.__aenter__ = AsyncMock(return_value=conn)
+    acquire_ctx.__aexit__ = AsyncMock(return_value=None)
+
+    pool = MagicMock(name="asyncpg-pool")
+    pool.acquire = MagicMock(return_value=acquire_ctx)
+    pool.execute = AsyncMock(name="pool-execute")
+    pool.fetch = AsyncMock(name="pool-fetch", return_value=[])
+    pool.fetchrow = AsyncMock(name="pool-fetchrow", return_value=None)
+    pool._conn = conn
+    return pool
+
+
 @pytest_asyncio.fixture
 async def async_client() -> AsyncIterator[AsyncClient]:
     """Yield an :class:`httpx.AsyncClient` bound to the FastAPI app.
@@ -53,3 +110,8 @@ async def async_client() -> AsyncIterator[AsyncClient]:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
+
+
+def _mock_pool_payload(pool: MagicMock) -> Any:
+    """Return the underlying connection inside ``mock_pool`` for assertions."""
+    return pool._conn
