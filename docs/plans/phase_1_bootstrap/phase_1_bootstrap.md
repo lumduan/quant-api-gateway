@@ -89,15 +89,16 @@ introduces business logic — only structure and a healthcheck.
 - [x] `curl -s localhost:8000/health` → `{"status":"ok"}` (HTTP 200)
       (2026-05-14 — verified via `httpx.AsyncClient` + ASGITransport tests
       and via live uvicorn smoke test)
-- [ ] `docker network create quant-network 2>/dev/null || true && docker compose up -d`
-      works on a fresh clone — _Docker daemon was unavailable on the
-      implementation host; `docker compose config` validates the YAML.
-      User must verify on a host with Docker._
-- [ ] `docker compose ps` reports both `quant-api-gateway` and `quant-redis`
-      as `(healthy)` — _pending Docker host verification_
-- [ ] `quant-redis` resolves by hostname from inside `quant-api-gateway`
-      (`docker exec quant-api-gateway getent hosts quant-redis`) — _pending
-      Docker host verification_
+- [x] `docker network create quant-network 2>/dev/null || true && docker compose up -d`
+      works on a fresh clone (2026-05-14, commit `b94468c` — verified
+      end-to-end after the port-clash fix; see Deviations below)
+- [x] `docker compose ps` reports both `quant-api-gateway` and `quant-redis`
+      as `(healthy)` (2026-05-14 — api-gateway healthy at t≈37s,
+      quant-redis healthy at t≈30s)
+- [x] `quant-redis` resolves by hostname from inside `quant-api-gateway`
+      (`docker exec quant-api-gateway getent hosts quant-redis` →
+      `172.18.0.5  quant-redis`); `quant-postgres` and `quant-mongo` also
+      resolve (2026-05-14)
 - [x] `uv run ruff check .` — zero findings (2026-05-14)
 - [x] `uv run ruff format --check .` — no drift (2026-05-14)
 - [x] `uv run mypy src tests` — zero strict-mode errors (2026-05-14)
@@ -359,14 +360,18 @@ TOTAL                       33      0      0      0   100%
 
 ### Deviations from the plan
 
-- **Docker stack verification deferred**: the Docker daemon was not
-  running on the implementation host (`docker info` failed). `docker
-  compose config` validates the YAML and `docker compose version` reports
-  CLI v5.1.3, but the live `docker compose up -d` end-to-end run must be
-  done by a user with Docker available. Three acceptance-criteria boxes
-  remain unchecked above and call this out explicitly. The Dockerfile and
-  `docker-compose.yml` are byte-for-byte aligned with the ROADMAP §1.3
-  template aside from the explicit `curl` install in the runtime image.
+- **Docker stack verified after the user started the daemon** (2026-05-14,
+  commit `b94468c`). Compose up + healthchecks + in-container curl +
+  hostname resolution + compose down all pass.
+- **Host-side port made configurable**: the ROADMAP showed
+  `ports: "8000:8000"` verbatim, but the user's dev host already runs
+  the upstream `quant-csm-set` Strategy Service on host port 8000. Rather
+  than ask the user to stop csm-set, we introduced an
+  `API_GATEWAY_HOST_PORT` env knob (defaulting to 8000 to match the
+  ROADMAP) and the user's local `.env` sets it to 8080. The container-
+  side port is still 8000 and all in-network communication is
+  unchanged. Documented in `README.md`. Future-phase impact: zero —
+  the env knob is purely a host-port detail.
 
 ### Anti-patterns avoided / patterns established
 
