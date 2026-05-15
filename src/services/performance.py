@@ -6,7 +6,7 @@ response schemas, and delegates aggregation to :mod:`src.services.aggregator`.
 
 import json
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -35,6 +35,13 @@ FROM daily_performance
 WHERE strategy_id = $1
 ORDER BY time DESC
 LIMIT 1
+"""
+
+_RANGE_SINGLE_STRATEGY_SQL = """
+SELECT strategy_id, total_value, daily_return, max_drawdown, sharpe_ratio, time, metadata
+FROM daily_performance
+WHERE strategy_id = $1 AND time::date BETWEEN $2 AND $3
+ORDER BY time ASC
 """
 
 
@@ -163,3 +170,35 @@ async def compute_strategy_performance(
         raise ServiceError(f"no performance data for strategy {strategy_id}")
 
     return _row_to_strategy_performance(dict(row))
+
+
+async def compute_strategy_performance_range(
+    pool: asyncpg.Pool,
+    strategy_id: str,
+    from_date: date,
+    to_date: date,
+) -> list[StrategyPerformanceResponse]:
+    """Query ``daily_performance`` rows for *strategy_id* in a date range.
+
+    Args:
+        pool: The asyncpg pool for ``db_gateway``.
+        strategy_id: The strategy to query.
+        from_date: Inclusive start date.
+        to_date: Inclusive end date.
+
+    Returns:
+        A list of :class:`StrategyPerformanceResponse` ordered by ``time ASC``.
+        Returns an empty list when no rows fall in the range (not an error).
+
+    Raises:
+        ServiceError: If Postgres rejects the query.
+    """
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(_RANGE_SINGLE_STRATEGY_SQL, strategy_id, from_date, to_date)
+    except asyncpg.PostgresError as exc:
+        raise ServiceError(
+            f"failed to query daily_performance for strategy {strategy_id} in range"
+        ) from exc
+
+    return [_row_to_strategy_performance(dict(row)) for row in rows]

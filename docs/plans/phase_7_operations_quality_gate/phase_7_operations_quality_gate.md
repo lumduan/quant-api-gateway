@@ -335,18 +335,73 @@ docker run --rm --network quant-network curlimages/curl \
 
 ## Progress / Notes
 
-*(Fill in after implementation)*
-
 ### Implementation date
+
+2026-05-15
 
 ### Quality-gate output
 
+```
+uv run ruff check .              → All checks passed!
+uv run ruff format --check .     → 62 files already formatted
+uv run mypy src tests            → Success: no issues found in 62 source files
+uv run pytest -v --cov=src       → 199 passed; Total coverage: 94.22%
+  --cov-fail-under=90            → passed (94.22% ≥ 90%)
+uv run pytest -m integration -v  → 7 passed, 199 deselected
+```
+
 ### Per-module coverage
+
+```
+src/api/v1/performance.py              60      6     10      2    89%
+src/api/v1/portfolio.py                62      4      8      1    93%
+src/logging_config.py                  23      2      4      2    85%
+src/main.py                            44      0      0      0   100%
+src/services/aggregator.py             56      1     24      1    98%
+src/services/performance.py            80     16     16      4    79%
+src/services/portfolio.py              63      8     16      4    85%
+TOTAL                                 914     43    158     19    94%
+```
+
+Uncovered lines are error-handling paths (Postgres failures, cache errors),
+defensive branches (request_id/ exc_info in JSONFormatter), and the new
+`compute_strategy_performance_range` function (tested in integration suite
+but excluded from default unit run).
 
 ### Dependency changes
 
+None. No new packages added. The JSON structured logger is a custom
+`logging.Formatter` subclass — stdlib only.
+
 ### Deviations from the plan
+
+- **Integration tests use ASGITransport** (in-process) rather than a TCP
+  connection to a running app. This exercises the full middleware stack
+  without requiring a separate process.
+- **Integration tests mock Redis/Postgres** rather than connecting to real
+  infrastructure. The `real_pool`/`real_redis` fixtures are defined in
+  conftest but not used by the current tests — they are scaffolding for
+  future tests that need real DB access.
+- **`pytest_collection_modifyitems`** needed a path guard
+  (`"tests/integration" in str(item.fspath)`) because the hook receives
+  ALL collected items, not just those in its directory.
 
 ### Problems encountered
 
+- **SIM108 ruff rule** required ternary operator for `normalize` branch in
+  `merge_equity_curves` — trivial fix.
+- **Import monkeypatching** — `get_redis` is not directly imported by API
+  modules (it lives in `src.db.redis_client` and is imported by
+  `src.services.cache`). Integration tests needed to target
+  `src.services.cache.get_redis` rather than
+  `src.api.v1.performance.get_redis`.
+- **Decimal JSON serialization** — Pydantic in `model_dump_json()` mode
+  serializes `Decimal` as strings. Integration test assertions needed
+  `float()` conversions (matching Phase 6 pattern).
+- **`mypy` strict mode** required explicit `-> None` return annotations on
+  `require_postgres` and `require_redis` fixtures.
+
 ### Time spent
+
+~2 hours end-to-end (planning, 6 files created, 8 files modified,
+quality gate iteration, integration test debugging, docs).

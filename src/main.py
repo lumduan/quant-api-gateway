@@ -1,25 +1,23 @@
 """FastAPI application entrypoint.
 
-Phase 1 wires up:
-
-* an ``async`` lifespan as the future home of database / Redis / HTTP
-  connection setup (no-op in Phase 1);
-* a root-level ``GET /health`` endpoint used by the Docker Compose
-  healthcheck;
-* the v1 router mounted under ``/api/v1`` (sub-routers are attached in
-  later phases).
+Wires up structured JSON logging, request-ID middleware, the async lifespan
+(database / Redis / strategy registry), ``GET /health``, and the v1 router
+mounted under ``/api/v1``.
 """
 
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from uuid import uuid4
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 from src.api.v1.router import api_router
 from src.config import get_settings
 from src.db.postgres import close_pool, get_pool
 from src.db.redis_client import close_redis, get_redis
+from src.logging_config import configure_logging, request_id_var
 from src.services import strategy_registry
 
 logger = logging.getLogger(__name__)
@@ -38,8 +36,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         Control to the running application. The generator resumes on shutdown
         to release the pool and clear the in-memory registry.
     """
-    logger.info("quant-api-gateway starting up")
     settings = get_settings()
+    configure_logging(settings)
+    logger.info("quant-api-gateway starting up")
     registry = strategy_registry.load_registry(settings.strategy_registry_path)
     strategy_registry.set_registry(registry)
     await get_pool()
@@ -51,6 +50,27 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await close_pool()
         await close_redis()
         strategy_registry.clear_registry()
+
+
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    """Attach a unique ``X-Request-ID`` header to every response.
+
+    A :func:`uuid4` is generated per request, stored on
+    ``request.state.request_id`` and in the :data:`request_id_var` context
+    variable so the structured logger can include it. The same id is echoed
+    back to the caller in the ``X-Request-ID`` response header.
+    """
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        request_id = str(uuid4())
+        request.state.request_id = request_id
+        token = request_id_var.set(request_id)
+        try:
+            response = await call_next(request)
+            response.headers["X-Request-ID"] = request_id
+            return response
+        finally:
+            request_id_var.reset(token)
 
 
 app = FastAPI(
@@ -94,4 +114,5 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+app.add_middleware(RequestIDMiddleware)
 app.include_router(api_router, prefix="/api/v1")

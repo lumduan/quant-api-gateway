@@ -15,22 +15,26 @@ The service runs as a FastAPI container on the shared Docker network
 `quant-network`, alongside the [`quant-infra-db`](https://github.com/lumduan/quant-infra-db)
 stack (`quant-postgres`, `quant-mongo`, `quant-redis`).
 
-Current status: **Phase 1 — Project Bootstrap complete.** Phase 1 ships the
-FastAPI skeleton, `/health` endpoint, validated settings, and the Docker
-Compose stack. See [`docs/plans/ROADMAP.md`](docs/plans/ROADMAP.md) for the
-seven-phase build-out.
+Current status: **Phase 7 — Operations & Quality Gate complete.** All 11
+endpoints are live, the Docker stack runs with non-root user and health checks,
+structured JSON logging is in place, and coverage is ≥90%. See
+[`docs/plans/ROADMAP.md`](docs/plans/ROADMAP.md) for the full build-out.
 
-## Endpoints (Phase 1)
+## API Endpoints
 
-| Method | Path | Purpose |
-|---|---|---|
-| GET | `/health` | Liveness probe — returns `{"status": "ok"}` |
-| GET | `/docs` | Swagger UI (auto-generated) |
-| GET | `/redoc` | ReDoc (auto-generated) |
-| GET | `/openapi.json` | OpenAPI 3.1 schema |
-
-Later phases add `/api/v1/ingest/daily-report`, `/api/v1/overall-performance`,
-`/api/v1/strategies/...`, `/api/v1/portfolio/...`.
+| Method | Path | Auth | Description | Cache TTL |
+|--------|------|------|-------------|-----------|
+| GET | `/health` | — | Health check | — |
+| POST | `/api/v1/ingest/daily-report` | `X-API-Key` | Ingest daily performance | — |
+| GET | `/api/v1/overall-performance` | — | Aggregated portfolio performance | 300 s |
+| GET | `/api/v1/strategies` | — | List all active strategies | — |
+| GET | `/api/v1/strategies/{id}` | — | Single strategy detail | — |
+| GET | `/api/v1/strategies/{id}/performance` | — | Latest or date-range performance | 300 s (latest only) |
+| GET | `/api/v1/strategies/{id}/equity-curve` | — | Full equity curve | — |
+| GET | `/api/v1/portfolio/snapshot` | — | Latest portfolio snapshot | 3600 s |
+| GET | `/api/v1/portfolio/snapshot/{date}` | — | Snapshot for specific date | 3600 s |
+| GET | `/api/v1/portfolio/equity-curve` | — | Merged portfolio equity curve | — |
+| POST | `/api/v1/admin/cache/flush` | `X-API-Key` | Flush Redis cache | — |
 
 ## Prerequisites
 
@@ -109,8 +113,7 @@ Or combined:
 uv run ruff check . && uv run ruff format --check . && uv run mypy src tests && uv run pytest
 ```
 
-Coverage gate: **≥80% global** (enforced by `pyproject.toml` and CI). Phase
-1 currently lands at **100%**.
+Coverage gate: **≥90% global** (enforced by `pyproject.toml` and CI).
 
 ## Security scanning
 
