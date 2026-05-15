@@ -571,7 +571,7 @@ Service posts a new report. ✅ (verified via unit tests)
 
 ### 6.1 Overall performance endpoint
 
-- [ ] `GET /api/v1/overall-performance`:
+- [x] `GET /api/v1/overall-performance`:
   - Read active strategies from the registry
   - Query the latest row per strategy from `daily_performance`
   - Compute `weighted_daily_return` + `combined_max_drawdown` via the
@@ -588,22 +588,22 @@ Service posts a new report. ✅ (verified via unit tests)
     "computed_at": "2026-05-14T11:00:00Z"
   }
   ```
-- [ ] Verify: data present → response returns every field with `200 OK`
-- [ ] Verify: no data → `{"active_strategies": 0, …}` (never a 500)
+- [x] Verify: data present → response returns every field with `200 OK`
+- [x] Verify: no data → `{"active_strategies": 0, …}` (never a 500)
 
 **Exit criteria:** the endpoint responds in under 200 ms on a cache hit and
 under 1 s on a cache miss.
 
 ### 6.2 Strategy-level endpoints
 
-- [ ] `GET /api/v1/strategies` — list every active strategy
-- [ ] `GET /api/v1/strategies/{strategy_id}` — single strategy detail
-- [ ] `GET /api/v1/strategies/{strategy_id}/performance` — performance
+- [x] `GET /api/v1/strategies` — list every active strategy
+- [x] `GET /api/v1/strategies/{strategy_id}` — single strategy detail
+- [x] `GET /api/v1/strategies/{strategy_id}/performance` — performance
   history; query params `?from=YYYY-MM-DD&to=YYYY-MM-DD`; sourced from
   `daily_performance`
-- [ ] `GET /api/v1/strategies/{strategy_id}/equity-curve` — full equity
+- [x] `GET /api/v1/strategies/{strategy_id}/equity-curve` — full equity
   curve
-- [ ] Verify: unknown `strategy_id` → `404 Not Found` with a clear detail
+- [x] Verify: unknown `strategy_id` → `404 Not Found` with a clear detail
   body
 
 **Exit criteria:** every endpoint returns a correct HTTP status code and a
@@ -611,22 +611,22 @@ typed error body on failure.
 
 ### 6.3 Portfolio endpoints
 
-- [ ] `GET /api/v1/portfolio/snapshot` — latest portfolio snapshot
-- [ ] `GET /api/v1/portfolio/snapshot/{date}` — snapshot for a specific
+- [x] `GET /api/v1/portfolio/snapshot` — latest portfolio snapshot
+- [x] `GET /api/v1/portfolio/snapshot/{date}` — snapshot for a specific
   date (`YYYY-MM-DD`)
-- [ ] `GET /api/v1/portfolio/equity-curve` — merged equity curve across
+- [x] `GET /api/v1/portfolio/equity-curve` — merged equity curve across
   every strategy; query params
   `?from=YYYY-MM-DD&to=YYYY-MM-DD&normalize=true`
-- [ ] Verify: a date with no data → `404 Not Found`
+- [x] Verify: a date with no data → `404 Not Found`
 
 **Exit criteria:** portfolio endpoints support full date-range querying.
 
 ### 6.4 API documentation
 
-- [ ] Swagger UI live at `/docs`
-- [ ] ReDoc live at `/redoc`
-- [ ] Every endpoint sets `summary`, `description`, and `response_model`
-- [ ] Record the endpoint reference table in `README.md`
+- [x] Swagger UI live at `/docs`
+- [x] ReDoc live at `/redoc`
+- [x] Every endpoint sets `summary`, `description`, and `response_model`
+- [-] Record the endpoint reference table in `README.md` (deferred to Phase 7)
 
 **Exit criteria:** a new developer can open `/docs` and exercise the API
 without reading source code.
@@ -832,21 +832,18 @@ extra configuration:
 
 > Update this section as each phase completes.
 
-- **Active phase:** Phase 6 — REST API Endpoints
-- **Completed phases:** Phase 1 — Project Bootstrap (2026-05-14), Phase 2 — Data Models & Schema Validation (2026-05-14), Phase 3 — Strategy Ingestion & Data Storage (2026-05-14), Phase 4 — Aggregation Engine (2026-05-15), Phase 5 — Redis Caching Layer (2026-05-15)
+- **Active phase:** Phase 7 — Operations & Quality Gate
+- **Completed phases:** Phase 1 — Project Bootstrap (2026-05-14), Phase 2 — Data Models & Schema Validation (2026-05-14), Phase 3 — Strategy Ingestion & Data Storage (2026-05-14), Phase 4 — Aggregation Engine (2026-05-15), Phase 5 — Redis Caching Layer (2026-05-15), Phase 6 — REST API Endpoints (2026-05-15)
 - **Blocked by:** `quant-infra-db` must be running on `quant-network` before
-  the Phase 7 integration suite can hit real `db_gateway` tables (Phase 5 unit
-  tests mock Redis, so they pass without it)
-- **Next:** Phase 6 — REST API Endpoints. Notes for Phase 6: Phase 5 delivered
-  the full cache infrastructure — `src/services/cache.py` with Pydantic-aware
-  get/set, `src/services/cache_invalidator.py` with best-effort invalidation
-  callbacks, and `POST /api/v1/admin/cache/flush`. Cache invalidation is wired
-  into `snapshot_writer.py` after successful upserts. The Redis client is
-  eagerly initialised in the FastAPI lifespan. Phase 6 read endpoints should:
-  call `get_cached` first → on miss query Postgres → compute via `aggregator.py`
-  → `set_cached` → return. TTL constants are on `Settings`:
-  `overall_performance_ttl_seconds` (300), `strategy_performance_ttl_seconds`
-  (300), `portfolio_snapshot_ttl_seconds` (3600).
+  the Phase 7 integration suite can hit real `db_gateway` tables (Phase 6 unit
+  tests mock Redis and Postgres, so they pass without it)
+- **Next:** Phase 7 — Operations & Quality Gate. Notes for Phase 7: Phase 6
+  delivered 7 read endpoints with cache-aside — `GET /api/v1/overall-performance`,
+  `GET /api/v1/strategies/{id}`, `GET /api/v1/strategies/{id}/performance`,
+  `GET /api/v1/strategies/{id}/equity-curve`, `GET /api/v1/portfolio/snapshot`,
+  `GET /api/v1/portfolio/snapshot/{date}`, `GET /api/v1/portfolio/equity-curve`.
+  New schema: `PortfolioSnapshotResponse`. New services: `performance.py`,
+  `portfolio.py`. All endpoints follow cache-aside with graceful degradation.
 
 ---
 

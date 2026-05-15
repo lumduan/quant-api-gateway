@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -79,3 +79,33 @@ class OverallPerformanceResponse(BaseModel):
     @classmethod
     def _enforce_utc_computed_at(cls, v: datetime) -> datetime:
         return _enforce_utc(v)
+
+
+class PortfolioSnapshotResponse(BaseModel):
+    """A single daily portfolio snapshot row."""
+
+    model_config = ConfigDict(frozen=True)
+
+    snapshot_date: date = Field(description="The date this snapshot represents (YYYY-MM-DD)")
+    total_portfolio_value: Decimal = Field(
+        description="Sum of all strategy total_values for this date",
+        max_digits=18,
+        decimal_places=4,
+        ge=0,
+    )
+    weighted_daily_return: Decimal = Field(
+        description="Capital-weighted daily return for this date",
+        max_digits=8,
+        decimal_places=6,
+    )
+    combined_drawdown: Decimal | None = Field(
+        default=None,
+        description="Portfolio-level maximum drawdown, or null when no equity curves available",
+        max_digits=8,
+        decimal_places=4,
+    )
+    active_strategies: int = Field(description="Number of strategies in the snapshot", ge=0)
+    allocation: dict[str, Decimal] = Field(
+        description="Map of strategy_id to normalized capital weight"
+    )
+    computed_at: datetime = Field(description="UTC timestamp when the snapshot row was written")
