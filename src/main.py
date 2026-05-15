@@ -19,6 +19,7 @@ from fastapi import FastAPI
 from src.api.v1.router import api_router
 from src.config import get_settings
 from src.db.postgres import close_pool, get_pool
+from src.db.redis_client import close_redis, get_redis
 from src.services import strategy_registry
 
 logger = logging.getLogger(__name__)
@@ -29,9 +30,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Manage application startup and shutdown.
 
     Loads the strategy registry from ``strategies.json`` (path configurable via
-    ``Settings.strategy_registry_path``) and opens the asyncpg pool eagerly so
-    the first ingestion request does not pay first-call latency. Mongo and
-    Redis stay lazy until later phases need them.
+    ``Settings.strategy_registry_path``) and opens the asyncpg pool and Redis
+    connection eagerly so the first request does not pay first-call latency.
+    Mongo stays lazy until a later phase needs it.
 
     Yields:
         Control to the running application. The generator resumes on shutdown
@@ -42,11 +43,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     registry = strategy_registry.load_registry(settings.strategy_registry_path)
     strategy_registry.set_registry(registry)
     await get_pool()
+    await get_redis()
     try:
         yield
     finally:
         logger.info("quant-api-gateway shutting down")
         await close_pool()
+        await close_redis()
         strategy_registry.clear_registry()
 
 

@@ -19,3 +19,7 @@ class IngestionPersistError(ServiceError):
 
 class AggregationError(ServiceError):
     """Raised when aggregation inputs are inconsistent or arithmetic fails."""
+
+
+class CacheError(ServiceError):
+    """Raised when a Redis operation fails (connection, timeout, serialization)."""
