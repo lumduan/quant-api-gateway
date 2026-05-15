@@ -7,8 +7,9 @@ later phases.
 
 from fastapi import APIRouter
 
-from src.api.v1 import ingest, strategies
+from src.api.v1 import admin, ingest, strategies
 
 api_router = APIRouter()
+api_router.include_router(admin.router)
 api_router.include_router(ingest.router)
 api_router.include_router(strategies.router)

@@ -327,3 +327,92 @@ def test_extract_equity_curve_skips_value_that_fails_decimal() -> None:
     }
     points = sw._extract_equity_curve(metadata)
     assert [p.date for p in points] == ["2026-05-15"]
+
+
+# ---- Phase 5: cache invalidation integration -----------------------------------
+
+
+@pytest.fixture
+def mock_invalidation(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Replace invalidation functions in ``snapshot_writer`` with mocks."""
+    from unittest.mock import AsyncMock
+
+    overall = AsyncMock(return_value=None)
+    strategy = AsyncMock(return_value=None)
+    monkeypatch.setattr(sw, "invalidate_overall_cache", overall)
+    monkeypatch.setattr(sw, "invalidate_strategy_cache", strategy)
+    return {"overall": overall, "strategy": strategy}
+
+
+async def test_maybe_write_snapshot_invalidates_cache_after_upsert(
+    mock_pool: Any, mock_invalidation: dict[str, Any]
+) -> None:
+    registry = _registry(_cfg(sid="a", weight="0.6"), _cfg(sid="b", weight="0.4"))
+    mock_pool._conn.fetch.return_value = [
+        {"strategy_id": "a", "total_value": 600_000.0, "daily_return": 0.01},
+        {"strategy_id": "b", "total_value": 400_000.0, "daily_return": 0.02},
+    ]
+    written = await sw.maybe_write_snapshot(
+        pool=mock_pool,
+        registry=registry,
+        now=datetime(2026, 5, 14, tzinfo=UTC),
+    )
+    assert written is True
+    mock_invalidation["overall"].assert_awaited_once()
+    assert mock_invalidation["strategy"].await_count == 2
+    mock_invalidation["strategy"].assert_any_await("a")
+    mock_invalidation["strategy"].assert_any_await("b")
+
+
+async def test_maybe_write_snapshot_succeeds_despite_invalidation_failure(
+    mock_pool: Any, mock_invalidation: dict[str, Any]
+) -> None:
+    mock_invalidation["overall"].side_effect = Exception("redis gone")
+    registry = _registry(_cfg(sid="a", weight="1"))
+    mock_pool._conn.fetch.return_value = [
+        {"strategy_id": "a", "total_value": 100.0, "daily_return": 0.0},
+    ]
+    written = await sw.maybe_write_snapshot(
+        pool=mock_pool,
+        registry=registry,
+        now=datetime(2026, 5, 14, tzinfo=UTC),
+    )
+    assert written is True  # invalidation failure does NOT block snapshot
+
+
+async def test_maybe_write_snapshot_invalidation_called_per_active_strategy(
+    mock_pool: Any, mock_invalidation: dict[str, Any]
+) -> None:
+    registry = _registry(
+        _cfg(sid="a", weight="0.3"),
+        _cfg(sid="b", weight="0.3"),
+        _cfg(sid="c", weight="0.4"),
+    )
+    mock_pool._conn.fetch.return_value = [
+        {"strategy_id": "a", "total_value": 100.0, "daily_return": 0.0},
+        {"strategy_id": "b", "total_value": 100.0, "daily_return": 0.0},
+        {"strategy_id": "c", "total_value": 100.0, "daily_return": 0.0},
+    ]
+    await sw.maybe_write_snapshot(
+        pool=mock_pool,
+        registry=registry,
+        now=datetime(2026, 5, 14, tzinfo=UTC),
+    )
+    assert mock_invalidation["strategy"].await_count == 3
+
+
+async def test_maybe_write_snapshot_no_invalidation_when_round_incomplete(
+    mock_pool: Any, mock_invalidation: dict[str, Any]
+) -> None:
+    registry = _registry(_cfg(sid="a", weight="1"), _cfg(sid="b", weight="1"))
+    mock_pool._conn.fetch.return_value = [
+        {"strategy_id": "a", "total_value": 100.0, "daily_return": 0.0},
+    ]
+    written = await sw.maybe_write_snapshot(
+        pool=mock_pool,
+        registry=registry,
+        now=datetime(2026, 5, 14, tzinfo=UTC),
+    )
+    assert written is False
+    mock_invalidation["overall"].assert_not_awaited()
+    mock_invalidation["strategy"].assert_not_awaited()

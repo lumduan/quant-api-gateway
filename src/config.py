@@ -70,6 +70,18 @@ class Settings(BaseSettings):
             "Relative paths are resolved against the working directory."
         ),
     )
+    overall_performance_ttl_seconds: int = Field(
+        default=300,
+        description="TTL in seconds for the ``overall_performance`` cache key.",
+    )
+    strategy_performance_ttl_seconds: int = Field(
+        default=300,
+        description="TTL in seconds for ``strategy:{id}:performance`` cache keys.",
+    )
+    portfolio_snapshot_ttl_seconds: int = Field(
+        default=3600,
+        description="TTL in seconds for ``portfolio_snapshot:{date}`` cache keys.",
+    )
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

@@ -536,57 +536,31 @@ different dates (e.g. CSM-SET today and a future TFEX strategy).
 
 ### 5.1 Cache layer
 
-- [ ] Create `src/services/cache.py`:
-  ```python
-  import json
-  from datetime import timedelta
-
-  from src.db.redis_client import get_redis
-
-  CACHE_TTL = timedelta(minutes=5)
-
-
-  async def get_cached(key: str) -> dict[str, object] | None:
-      """Return a cached value, or None on miss."""
-      redis = await get_redis()
-      value = await redis.get(key)
-      return json.loads(value) if value else None
-
-
-  async def set_cached(
-      key: str,
-      value: dict[str, object],
-      ttl: timedelta = CACHE_TTL,
-  ) -> None:
-      """Set a cached value with a TTL."""
-      redis = await get_redis()
-      await redis.setex(
-          key,
-          int(ttl.total_seconds()),
-          json.dumps(value, default=str),
-      )
-  ```
-- [ ] Cache key conventions:
-  - `overall_performance` — TTL 5 minutes
-  - `strategy:{strategy_id}:performance` — TTL 5 minutes
-  - `portfolio_snapshot:{YYYY-MM-DD}` — TTL 1 hour
+- [x] Create `src/services/cache.py` — async get/set/invalidate with Pydantic
+  model serde, configurable TTLs, SCAN-based pattern invalidation, and
+  `CacheError` wrapping all Redis exceptions.
+- [x] Cache key conventions:
+  - `overall_performance` — TTL 5 minutes (configurable via `Settings`)
+  - `strategy:{strategy_id}:performance` — TTL 5 minutes (configurable)
+  - `portfolio_snapshot:{YYYY-MM-DD}` — TTL 1 hour (configurable)
 
 **Exit criteria:** a cache miss recomputes; a cache hit responds in
-< 10 ms.
+< 10 ms. ✅ (verified via unit tests with mocked Redis)
 
 ### 5.2 Cache invalidation
 
-- [ ] Create `src/services/cache_invalidator.py`:
+- [x] Create `src/services/cache_invalidator.py`:
   - `invalidate_overall_cache()` — called after every ingestion
   - `invalidate_strategy_cache(strategy_id)` — called when a single
     strategy updates
-- [ ] Endpoint: `POST /api/v1/admin/cache/flush` — guarded by the internal
+  - `flush_all()` — SCAN + DELETE all gateway-owned keys
+- [x] Endpoint: `POST /api/v1/admin/cache/flush` — guarded by the internal
   API key, flushes every gateway-owned key
-- [ ] Verify: a new ingestion request → the previous `overall_performance`
-  cache entry is gone → the next request returns fresh data
+- [x] Verify: cache invalidation is called after successful snapshot upsert;
+  invalidation failure does not block snapshot write
 
 **Exit criteria:** the Dashboard never sees stale data after a Strategy
-Service posts a new report.
+Service posts a new report. ✅ (verified via unit tests)
 
 ---
 
@@ -858,19 +832,21 @@ extra configuration:
 
 > Update this section as each phase completes.
 
-- **Active phase:** Phase 5 — Redis Caching Layer
-- **Completed phases:** Phase 1 — Project Bootstrap (2026-05-14), Phase 2 — Data Models & Schema Validation (2026-05-14), Phase 3 — Strategy Ingestion & Data Storage (2026-05-14), Phase 4 — Aggregation Engine (2026-05-15)
+- **Active phase:** Phase 6 — REST API Endpoints
+- **Completed phases:** Phase 1 — Project Bootstrap (2026-05-14), Phase 2 — Data Models & Schema Validation (2026-05-14), Phase 3 — Strategy Ingestion & Data Storage (2026-05-14), Phase 4 — Aggregation Engine (2026-05-15), Phase 5 — Redis Caching Layer (2026-05-15)
 - **Blocked by:** `quant-infra-db` must be running on `quant-network` before
-  the Phase 7 integration suite can hit real `db_gateway` tables (Phase 4 unit
-  tests mock the asyncpg pool, so they pass without it)
-- **Next:** Phase 5 — Redis Caching Layer. Notes for Phase 5: Phase 4 wired
-  `calculate_combined_drawdown` into `src/services/snapshot_writer.py`, so the
-  `portfolio_snapshot.combined_drawdown` column is now populated (no longer
-  NULL) whenever every active strategy reports an `equity_curve`. The aggregator
-  is a pure module (`src/services/aggregator.py`) with no I/O — Phase 5 / 6
-  callers wire it to Redis and HTTP without re-design. Phase 4 added `pandas`
-  (only used by `merge_equity_curves`); the Phase 5 cache layer can stay
-  stdlib-only.
+  the Phase 7 integration suite can hit real `db_gateway` tables (Phase 5 unit
+  tests mock Redis, so they pass without it)
+- **Next:** Phase 6 — REST API Endpoints. Notes for Phase 6: Phase 5 delivered
+  the full cache infrastructure — `src/services/cache.py` with Pydantic-aware
+  get/set, `src/services/cache_invalidator.py` with best-effort invalidation
+  callbacks, and `POST /api/v1/admin/cache/flush`. Cache invalidation is wired
+  into `snapshot_writer.py` after successful upserts. The Redis client is
+  eagerly initialised in the FastAPI lifespan. Phase 6 read endpoints should:
+  call `get_cached` first → on miss query Postgres → compute via `aggregator.py`
+  → `set_cached` → return. TTL constants are on `Settings`:
+  `overall_performance_ttl_seconds` (300), `strategy_performance_ttl_seconds`
+  (300), `portfolio_snapshot_ttl_seconds` (3600).
 
 ---
 

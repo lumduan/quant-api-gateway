@@ -19,6 +19,10 @@ import asyncpg
 from src.schemas.registry import StrategyConfig, StrategyRegistry
 from src.schemas.strategy import EquityPoint
 from src.services.aggregator import calculate_combined_drawdown
+from src.services.cache_invalidator import (
+    invalidate_overall_cache,
+    invalidate_strategy_cache,
+)
 from src.services.errors import ServiceError
 
 logger = logging.getLogger(__name__)
@@ -223,4 +227,10 @@ async def maybe_write_snapshot(
         agg.total_portfolio,
         agg.active_strategies,
     )
+    try:
+        await invalidate_overall_cache()
+        for cfg in active:
+            await invalidate_strategy_cache(cfg.id)
+    except Exception:
+        logger.exception("cache invalidation failed after snapshot upsert")
     return True
