@@ -131,12 +131,29 @@ This repository is set up for AI coding agents (Claude Code, Cursor, etc.):
 
 | File | Purpose |
 |---|---|
-| `.claude/knowledge/project-skill.md` | **Start here.** Hard rules and quality gates. |
+| **`docs/PROJECT.md`** | **Complete project reference.** Every module, function, schema, endpoint, and design decision. LLM-friendly. |
+| `.claude/knowledge/project-skill.md` | Hard rules and quality gates. |
 | `.claude/knowledge/architecture.md` | Module boundaries and data flow. |
 | `.claude/knowledge/coding-standards.md` | Naming, typing, docstrings, async. |
 | `.claude/knowledge/commands.md` | Full command reference. |
 | `.claude/knowledge/stack-decisions.md` | Why each tool was chosen. |
 | `.claude/playbooks/feature-development.md` | 8-step feature workflow. |
+| `docs/plans/ROADMAP.md` | Phased build-out (currently the source of truth). |
+| `docs/plans/phase_*/` | Per-phase implementation plans with post-implementation notes. |
+
+## Documentation index
+
+| Document | Covers |
+|---|---|
+| [`docs/PROJECT.md`](docs/PROJECT.md) | Architecture, schemas, services, endpoints, config, database, Docker, quality gate, caching, data flow — the complete reference |
+| [`docs/plans/ROADMAP.md`](docs/plans/ROADMAP.md) | Phased build-out with per-feature acceptance criteria, exit criteria, and current status |
+| [`docs/plans/phase_7_operations_quality_gate/`](docs/plans/phase_7_operations_quality_gate/) | Phase 7 implementation plan and post-implementation notes |
+| [`docs/plans/phase_6_rest_api_endpoints/`](docs/plans/phase_6_rest_api_endpoints/) | Phase 6 REST API build plan with design decisions and hand-off notes |
+| [`docs/plans/phase_5_redis_caching/`](docs/plans/phase_5_redis_caching/) | Phase 5 cache-aside architecture and invalidation design |
+| [`docs/plans/phase_4_aggregation_engine/`](docs/plans/phase_4_aggregation_engine/) | Phase 4 aggregation formulas and test fixtures |
+| [`docs/plans/phase_3_strategy_ingestion/`](docs/plans/phase_3_strategy_ingestion/) | Phase 3 ingestion flow and snapshot writer design |
+| [`docs/plans/phase_2_data_models/`](docs/plans/phase_2_data_models/) | Phase 2 Pydantic V2 schemas and database layer |
+| [`docs/plans/phase_1_bootstrap/`](docs/plans/phase_1_bootstrap/) | Phase 1 project skeleton and Docker Compose setup |
 | `docs/plans/ROADMAP.md` | Phased build-out (currently the source of truth). |
 | `docs/plans/phase_*/` | Per-phase implementation plans. |
 
