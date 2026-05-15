@@ -94,7 +94,7 @@ async def test_maybe_write_snapshot_round_complete(mock_pool: Any) -> None:
     assert args[1] == datetime(2026, 5, 14, 0, 0, tzinfo=UTC)  # UTC midnight bucket
     assert args[2] == pytest.approx(1_000_000.0)  # total_portfolio
     assert args[3] == pytest.approx(0.01 * 0.6 + 0.02 * 0.4)  # weighted_return
-    assert args[4] is None  # combined_drawdown deferred to Phase 4
+    assert args[4] is None  # combined_drawdown is None when rows have no equity_curve
     assert args[5] == 2  # active_strategies
     assert json.loads(args[6]) == pytest.approx({"a": 0.6, "b": 0.4})
 
@@ -172,3 +172,158 @@ def test_compute_aggregates_today_bucket_is_midnight() -> None:
 def test_date_helper_round_trip() -> None:
     # Coverage assist for date import — ensures `date` arithmetic stays sound
     assert date(2026, 5, 14).isoformat() == "2026-05-14"
+
+
+# ---- Phase 4: combined_drawdown / metadata extraction ----------------------------
+
+
+def _row_with_curve(
+    *,
+    sid: str,
+    total_value: float,
+    daily_return: float,
+    curve_points: list[tuple[str, str]],
+    as_string: bool = False,
+) -> dict[str, Any]:
+    metadata: Any = {"equity_curve": [{"date": d, "value": v} for d, v in curve_points]}
+    if as_string:
+        metadata = json.dumps(metadata)
+    return {
+        "strategy_id": sid,
+        "total_value": total_value,
+        "daily_return": daily_return,
+        "metadata": metadata,
+    }
+
+
+def test_select_sql_includes_metadata_column() -> None:
+    # Guards against accidental regression of the Phase 4 SQL extension.
+    assert "metadata" in sw._SELECT_TODAY_SQL
+
+
+def test_compute_aggregates_fills_combined_drawdown_when_curves_present() -> None:
+    rows = [
+        _row_with_curve(
+            sid="a",
+            total_value=100_000.0,
+            daily_return=0.01,
+            curve_points=[
+                ("2026-05-12", "100"),
+                ("2026-05-13", "80"),
+                ("2026-05-14", "110"),
+            ],
+        ),
+        _row_with_curve(
+            sid="b",
+            total_value=100_000.0,
+            daily_return=0.02,
+            curve_points=[
+                ("2026-05-12", "100"),
+                ("2026-05-13", "100"),
+                ("2026-05-14", "100"),
+            ],
+        ),
+    ]
+    active = [_cfg(sid="a", weight="0.5"), _cfg(sid="b", weight="0.5")]
+    agg = sw._compute_aggregates(rows, active)
+    # Merged (both base-100 already, equal weights):
+    # 05-12: (100+100)/2 = 100
+    # 05-13: (80+100)/2  = 90  → drawdown = 90/100 - 1 = -0.10
+    # 05-14: (110+100)/2 = 105 → no further drawdown (peak still 100, 105/105-1=0)
+    # Running peak after 05-14 is 105; max_dd encountered = -0.10
+    assert agg.combined_drawdown == pytest.approx(-0.10, rel=1e-9)
+
+
+def test_compute_aggregates_combined_drawdown_none_when_no_curves() -> None:
+    rows = [
+        {"strategy_id": "a", "total_value": 100.0, "daily_return": 0.0, "metadata": None},
+    ]
+    active = [_cfg(sid="a", weight="1")]
+    agg = sw._compute_aggregates(rows, active)
+    assert agg.combined_drawdown is None
+
+
+def test_compute_aggregates_accepts_metadata_as_json_string() -> None:
+    rows = [
+        _row_with_curve(
+            sid="a",
+            total_value=100.0,
+            daily_return=0.0,
+            curve_points=[("2026-05-13", "100"), ("2026-05-14", "80")],
+            as_string=True,  # asyncpg returns JSONB as str by default
+        ),
+    ]
+    active = [_cfg(sid="a", weight="1")]
+    agg = sw._compute_aggregates(rows, active)
+    assert agg.combined_drawdown == pytest.approx(-0.20, rel=1e-9)
+
+
+async def test_maybe_write_snapshot_persists_combined_drawdown(mock_pool: Any) -> None:
+    registry = _registry(_cfg(sid="a", weight="1"))
+    mock_pool._conn.fetch.return_value = [
+        _row_with_curve(
+            sid="a",
+            total_value=100.0,
+            daily_return=0.0,
+            curve_points=[("2026-05-13", "100"), ("2026-05-14", "80")],
+        ),
+    ]
+    written = await sw.maybe_write_snapshot(
+        pool=mock_pool,
+        registry=registry,
+        now=datetime(2026, 5, 14, tzinfo=UTC),
+    )
+    assert written is True
+    args = mock_pool._conn.execute.call_args.args
+    # combined_drawdown is the 4th positional arg (index 4) of _UPSERT_SQL.
+    assert args[4] == pytest.approx(-0.20, rel=1e-9)
+
+
+# ---- _extract_equity_curve direct unit tests -------------------------------------
+
+
+def test_extract_equity_curve_none_returns_empty() -> None:
+    assert sw._extract_equity_curve(None) == []
+
+
+def test_extract_equity_curve_invalid_json_string_returns_empty() -> None:
+    assert sw._extract_equity_curve("{not valid json") == []
+
+
+def test_extract_equity_curve_unexpected_type_returns_empty() -> None:
+    assert sw._extract_equity_curve(42) == []
+
+
+def test_extract_equity_curve_dict_without_key_returns_empty() -> None:
+    assert sw._extract_equity_curve({"other_key": []}) == []
+
+
+def test_extract_equity_curve_non_list_value_returns_empty() -> None:
+    assert sw._extract_equity_curve({"equity_curve": "not-a-list"}) == []
+
+
+def test_extract_equity_curve_skips_malformed_entries() -> None:
+    metadata = {
+        "equity_curve": [
+            {"date": "2026-05-13", "value": "100"},
+            "not-a-dict",
+            {"date": None, "value": "999"},  # invalid date type
+            {"date": "2026-05-14", "value": None},  # missing value
+            {"date": "2026-05-15", "value": "110"},
+        ]
+    }
+    points = sw._extract_equity_curve(metadata)
+    assert [p.date for p in points] == ["2026-05-13", "2026-05-15"]
+
+
+def test_extract_equity_curve_skips_value_that_fails_decimal() -> None:
+    # Pattern-rejected dates would be a Pydantic validation error → entry skipped.
+    metadata = {
+        "equity_curve": [
+            {"date": "not-a-date", "value": "100"},
+            {"date": "2026-05-14", "value": "good"},  # Decimal("good") raises
+            {"date": "2026-05-15", "value": "150"},
+        ]
+    }
+    points = sw._extract_equity_curve(metadata)
+    assert [p.date for p in points] == ["2026-05-15"]
