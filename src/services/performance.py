@@ -132,11 +132,15 @@ async def compute_overall_performance(
         if isinstance(total_portfolio_value, Decimal)
         else Decimal(str(total_portfolio_value))
     )
-    wr = weighted_return if isinstance(weighted_return, Decimal) else Decimal(str(weighted_return))
+    wr_raw = (
+        weighted_return if isinstance(weighted_return, Decimal) else Decimal(str(weighted_return))
+    )
+    wr = wr_raw.quantize(Decimal("0.000001"))
+    dd = Decimal(str(combined_drawdown_val)).quantize(Decimal("0.0001"))
     return OverallPerformanceResponse(
         total_portfolio_value=tv,
         weighted_daily_return=wr,
-        combined_max_drawdown=Decimal(str(combined_drawdown_val)),
+        combined_max_drawdown=dd,
         active_strategies=len(active),
         allocation=allocation,
         strategies=strategies,

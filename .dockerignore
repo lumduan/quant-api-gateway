@@ -9,6 +9,7 @@ examples/
 scripts/
 .env
 *.md
+!README.md
 .mypy_cache
 .ruff_cache
 dist/
