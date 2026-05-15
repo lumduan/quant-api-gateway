@@ -108,12 +108,15 @@ async def query_snapshot_by_date(
 async def compute_portfolio_equity_curve(
     pool: asyncpg.Pool,
     registry: StrategyRegistry,
+    normalize: bool = True,
 ) -> list[EquityPoint]:
     """Read the latest equity curve from every active strategy and merge them.
 
     Args:
         pool: The asyncpg pool for ``db_gateway``.
         registry: The strategy registry loaded at startup.
+        normalize: When ``True`` (default), normalise each input curve to
+            base 100 before merging. When ``False``, use raw values.
 
     Returns:
         The merged equity curve (a list of :class:`EquityPoint`). Empty list
@@ -144,4 +147,4 @@ async def compute_portfolio_equity_curve(
         sid: float(cfg.capital_weight) for sid, cfg in zip(active_ids, active, strict=True)
     }
 
-    return merge_equity_curves(curves, weights)
+    return merge_equity_curves(curves, weights, normalize=normalize)

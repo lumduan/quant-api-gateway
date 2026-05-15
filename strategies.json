@@ -3,7 +3,7 @@
     {
       "id": "csm-set-01",
       "name": "CSM SET Strategy",
-      "service_url": "http://quant-csm-set:8001",
+      "service_url": "http://csm:8000",
       "capital_weight": 1.0,
       "active": true
     }

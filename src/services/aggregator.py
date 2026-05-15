@@ -75,6 +75,7 @@ def calculate_weighted_return(
 def merge_equity_curves(
     curves: Mapping[str, Sequence[EquityPoint]],
     weights: Mapping[str, float],
+    normalize: bool = True,
 ) -> list[EquityPoint]:
     """Merge per-strategy equity curves into a single portfolio curve.
 
@@ -82,8 +83,9 @@ def merge_equity_curves(
 
     1. Drop any strategy whose curve is empty, weight is ``<= 0``, or first
        value is ``<= 0``.
-    2. Normalise each remaining curve to base 100 (divide by its earliest
-       value, multiply by 100).
+    2. When *normalize* is ``True`` (the default), normalise each remaining
+       curve to base 100 (divide by its earliest value, multiply by 100).
+       When ``False``, use raw cumulative values as-is.
     3. Outer-join on date strings; forward-fill missing dates.
     4. Per row, weighted sum across strategies that *have data on that row*,
        divided by the sum of weights of those strategies. This makes the
@@ -96,6 +98,8 @@ def merge_equity_curves(
             :class:`EquityPoint`). Empty curves are silently dropped.
         weights: Map of ``strategy_id → capital weight``. Strategies absent
             from ``weights`` or with weight ``<= 0`` are dropped.
+        normalize: When ``True`` (default), normalise each input curve to
+            base 100 before merging. When ``False``, use raw values.
 
     Returns:
         A list of :class:`EquityPoint` covering every date for which at least
@@ -130,7 +134,7 @@ def merge_equity_curves(
         first_value = float(series.iloc[0])
         if first_value <= 0:
             continue
-        normalised = series / first_value * 100.0
+        normalised = series / first_value * 100.0 if normalize else series
         series_by_sid[sid] = normalised
         weight_by_sid[sid] = weight
 

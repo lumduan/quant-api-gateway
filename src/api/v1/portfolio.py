@@ -126,7 +126,7 @@ async def get_portfolio_equity_curve(
     registry = get_registry()
     pool = await get_pool()
     try:
-        result = await compute_portfolio_equity_curve(pool, registry)
+        result = await compute_portfolio_equity_curve(pool, registry, normalize=normalize)
     except ServiceError as exc:
         logger.exception("failed to compute portfolio equity curve")
         raise HTTPException(

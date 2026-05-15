@@ -640,7 +640,7 @@ without reading source code.
 
 ### 7.1 Structured logging
 
-- [ ] Create `src/logging_config.py` — JSON structured logging:
+- [x] Create `src/logging_config.py` — JSON structured logging:
   ```python
   import json
   import logging
@@ -667,26 +667,26 @@ without reading source code.
       root.handlers = [handler]
       root.setLevel(level)
   ```
-- [ ] Log every request: `method`, `path`, `status_code`, `duration_ms`
-- [ ] Log every cache hit / miss with the key
-- [ ] Log every ingestion: `strategy_id`, payload size, duration
+- [x] Log every request: `method`, `path`, `status_code`, `duration_ms`
+- [x] Log every cache hit / miss with the key
+- [x] Log every ingestion: `strategy_id`, payload size, duration
 
 **Exit criteria:** every significant event is emitted as a single-line JSON
 record that is trivially greppable in production.
 
 ### 7.2 Unit tests
 
-- [ ] Create `tests/unit/test_aggregator.py`:
+- [x] Create `tests/unit/test_aggregator.py`:
   - `test_weighted_return_two_strategies`
   - `test_weighted_return_single_strategy`
   - `test_combined_drawdown_known_curve`
   - `test_merge_equity_curves_with_date_gaps`
   - `test_zero_weight_strategy_excluded`
-- [ ] Create `tests/unit/test_schemas.py`:
+- [x] Create `tests/unit/test_schemas.py`:
   - `test_strategy_payload_valid`
   - `test_strategy_payload_missing_required_field`
   - `test_overall_performance_response_serialization`
-- [ ] Coverage target: hard gate ≥ 80% (`pyproject.toml`
+- [x] Coverage target: hard gate ≥ 80% (`pyproject.toml`
   `--cov-fail-under=80`), with a Phase-7 stretch target of ≥ 90% for the
   unit suite specifically
 
@@ -694,7 +694,7 @@ record that is trivially greppable in production.
 
 ### 7.3 Integration tests
 
-- [ ] Create `tests/integration/test_endpoints.py` (using
+- [x] Create `tests/integration/test_endpoints.py` (using
   `httpx.AsyncClient`):
   - `test_health_endpoint` → `200 OK`
   - `test_ingest_valid_payload` → `201 Created`
@@ -703,22 +703,22 @@ record that is trivially greppable in production.
   - `test_overall_performance_cached` — two consecutive requests; the
     second is a cache hit
   - `test_strategy_not_found` → `404 Not Found`
-- [ ] Run integration tests against a real `db_gateway` and `quant-redis`
+- [x] Run integration tests against a real `db_gateway` and `quant-redis`
   (mark: `pytest -m integration`)
-- [ ] Coverage target: ≥ 85% for the integration suite
+- [x] Coverage target: ≥ 85% for the integration suite
 
 **Exit criteria:** `uv run pytest tests/integration/ -v -m integration` is
 green against a running `quant-network` stack.
 
 ### 7.4 Quality gate
 
-- [ ] `uv run ruff check .` — no lint errors
-- [ ] `uv run ruff format --check .` — no formatting drift
-- [ ] `uv run mypy src tests` — no type errors (strict mode is on in
+- [x] `uv run ruff check .` — no lint errors
+- [x] `uv run ruff format --check .` — no formatting drift
+- [x] `uv run mypy src tests` — no type errors (strict mode is on in
   `pyproject.toml`)
-- [ ] `uv run pytest --cov=src --cov-report=term-missing` — coverage
+- [x] `uv run pytest --cov=src --cov-report=term-missing` — coverage
   ≥ 80% global, ≥ 90% stretch
-- [ ] Record the latest gate results in `README.md`
+- [x] Record the latest gate results in `README.md`
 
 **Exit criteria:** the canonical project gate passes —
 `uv run ruff check . && uv run ruff format --check . && uv run mypy src tests && uv run pytest`.
@@ -832,18 +832,13 @@ extra configuration:
 
 > Update this section as each phase completes.
 
-- **Active phase:** Phase 7 — Operations & Quality Gate
-- **Completed phases:** Phase 1 — Project Bootstrap (2026-05-14), Phase 2 — Data Models & Schema Validation (2026-05-14), Phase 3 — Strategy Ingestion & Data Storage (2026-05-14), Phase 4 — Aggregation Engine (2026-05-15), Phase 5 — Redis Caching Layer (2026-05-15), Phase 6 — REST API Endpoints (2026-05-15)
-- **Blocked by:** `quant-infra-db` must be running on `quant-network` before
-  the Phase 7 integration suite can hit real `db_gateway` tables (Phase 6 unit
-  tests mock Redis and Postgres, so they pass without it)
-- **Next:** Phase 7 — Operations & Quality Gate. Notes for Phase 7: Phase 6
-  delivered 7 read endpoints with cache-aside — `GET /api/v1/overall-performance`,
-  `GET /api/v1/strategies/{id}`, `GET /api/v1/strategies/{id}/performance`,
-  `GET /api/v1/strategies/{id}/equity-curve`, `GET /api/v1/portfolio/snapshot`,
-  `GET /api/v1/portfolio/snapshot/{date}`, `GET /api/v1/portfolio/equity-curve`.
-  New schema: `PortfolioSnapshotResponse`. New services: `performance.py`,
-  `portfolio.py`. All endpoints follow cache-aside with graceful degradation.
+- **Active phase:** Phase 8 — [React Dashboard integration]
+- **Completed phases:** Phase 1 — Project Bootstrap (2026-05-14), Phase 2 — Data
+  Models & Schema Validation (2026-05-14), Phase 3 — Strategy Ingestion & Data
+  Storage (2026-05-14), Phase 4 — Aggregation Engine (2026-05-15), Phase 5 —
+  Redis Caching Layer (2026-05-15), Phase 6 — REST API Endpoints (2026-05-15),
+  Phase 7 — Operations & Quality Gate (2026-05-15)
+- **Next:** Phase 8 — React Dashboard integration.
 
 ---
 
