@@ -15,3 +15,7 @@ class UnknownStrategyError(ServiceError):
 
 class IngestionPersistError(ServiceError):
     """Raised when persisting a ``daily_performance`` row to Postgres fails."""
+
+
+class AggregationError(ServiceError):
+    """Raised when aggregation inputs are inconsistent or arithmetic fails."""

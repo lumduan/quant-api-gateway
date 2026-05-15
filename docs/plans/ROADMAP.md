@@ -456,14 +456,16 @@ active strategy has reported.
 
 ---
 
-## Phase 4 — Aggregation Engine 🧮
+## Phase 4 — Aggregation Engine 🧮 ✅ (completed 2026-05-15)
 
 > **Goal:** Compute weighted return, combined drawdown, and a merged equity
 > curve from multiple strategies.
+>
+> **Status:** Complete. See [`phase_4_aggregation_engine/phase_4_aggregation_engine.md`](phase_4_aggregation_engine/phase_4_aggregation_engine.md) for the implementation plan and post-implementation notes.
 
 ### 4.1 Weighted return
 
-- [ ] Create `src/services/aggregator.py`:
+- [x] Create `src/services/aggregator.py`:
   ```python
   from src.schemas.gateway import StrategyPerformanceResponse
 
@@ -494,8 +496,8 @@ active strategy has reported.
       )
       return weighted / total_weight
   ```
-- [ ] Unit test: two strategies (60/40 weighting) → known expected return
-- [ ] Unit test edge cases: all weights zero, single strategy,
+- [x] Unit test: two strategies (60/40 weighting) → known expected return
+- [x] Unit test edge cases: all weights zero, single strategy,
   `total_value == 0`
 
 **Exit criteria:** `calculate_weighted_return` passes unit tests for every
@@ -503,11 +505,11 @@ edge case.
 
 ### 4.2 Combined drawdown
 
-- [ ] Add `calculate_combined_drawdown()` to `aggregator.py`:
+- [x] Add `calculate_combined_drawdown()` to `aggregator.py`:
   - Take equity curves from every active strategy
   - Merge them into a single portfolio equity curve (weighted sum)
   - Return the max drawdown of the merged curve: `(peak − trough) / peak`
-- [ ] Unit test: a hand-crafted equity curve with a known drawdown → exact
+- [x] Unit test: a hand-crafted equity curve with a known drawdown → exact
   match
 
 **Exit criteria:** combined drawdown is correct on known fixtures and
@@ -515,11 +517,11 @@ gracefully handles missing data for individual strategies.
 
 ### 4.3 Equity-curve merger
 
-- [ ] Add `merge_equity_curves()` to `aggregator.py`:
+- [x] Add `merge_equity_curves()` to `aggregator.py`:
   - Align points by date (outer join)
   - Forward-fill missing dates
   - Normalize each input curve to base 100 before merging
-- [ ] Unit test: two curves that span different date ranges → the merged
+- [x] Unit test: two curves that span different date ranges → the merged
   curve covers every date
 
 **Exit criteria:** the merger handles strategies that start trading on
@@ -856,16 +858,19 @@ extra configuration:
 
 > Update this section as each phase completes.
 
-- **Active phase:** Phase 4 — Aggregation Engine
-- **Completed phases:** Phase 1 — Project Bootstrap (2026-05-14), Phase 2 — Data Models & Schema Validation (2026-05-14), Phase 3 — Strategy Ingestion & Data Storage (2026-05-14)
+- **Active phase:** Phase 5 — Redis Caching Layer
+- **Completed phases:** Phase 1 — Project Bootstrap (2026-05-14), Phase 2 — Data Models & Schema Validation (2026-05-14), Phase 3 — Strategy Ingestion & Data Storage (2026-05-14), Phase 4 — Aggregation Engine (2026-05-15)
 - **Blocked by:** `quant-infra-db` must be running on `quant-network` before
-  the Phase 7 integration suite can hit real `db_gateway` tables (Phase 3 unit
+  the Phase 7 integration suite can hit real `db_gateway` tables (Phase 4 unit
   tests mock the asyncpg pool, so they pass without it)
-- **Next:** Phase 4 — Aggregation Engine. Note for Phase 4: the snapshot writer in
-  Phase 3 already computes `weighted_return` and writes `combined_drawdown = NULL`;
-  Phase 4 fills in the combined drawdown via the equity-curve merger and may also
-  extend the merger formula. The raw `daily_pnl` is preserved inside
-  `daily_performance.metadata` JSONB if any alternative return definition is needed.
+- **Next:** Phase 5 — Redis Caching Layer. Notes for Phase 5: Phase 4 wired
+  `calculate_combined_drawdown` into `src/services/snapshot_writer.py`, so the
+  `portfolio_snapshot.combined_drawdown` column is now populated (no longer
+  NULL) whenever every active strategy reports an `equity_curve`. The aggregator
+  is a pure module (`src/services/aggregator.py`) with no I/O — Phase 5 / 6
+  callers wire it to Redis and HTTP without re-design. Phase 4 added `pandas`
+  (only used by `merge_equity_curves`); the Phase 5 cache layer can stay
+  stdlib-only.
 
 ---
 

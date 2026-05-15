@@ -17,6 +17,8 @@ from typing import Any
 import asyncpg
 
 from src.schemas.registry import StrategyConfig, StrategyRegistry
+from src.schemas.strategy import EquityPoint
+from src.services.aggregator import calculate_combined_drawdown
 from src.services.errors import ServiceError
 
 logger = logging.getLogger(__name__)
@@ -24,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 _SELECT_TODAY_SQL = """
 SELECT DISTINCT ON (strategy_id)
-    strategy_id, total_value, daily_return
+    strategy_id, total_value, daily_return, metadata
 FROM daily_performance
 WHERE time::date = $1 AND strategy_id = ANY($2::text[])
 ORDER BY strategy_id, time DESC
@@ -55,6 +57,44 @@ class SnapshotAggregates:
     allocation: dict[str, float]
 
 
+def _extract_equity_curve(metadata: Any) -> list[EquityPoint]:
+    """Extract the ``equity_curve`` list from a ``daily_performance.metadata`` blob.
+
+    ``asyncpg`` returns JSONB as ``str`` by default; tests sometimes mock it as
+    a Python ``dict``. Both shapes are tolerated. Missing / malformed payloads
+    return an empty list (the aggregator silently ignores empty curves).
+    """
+    if metadata is None:
+        return []
+    if isinstance(metadata, str):
+        try:
+            payload = json.loads(metadata)
+        except json.JSONDecodeError:
+            return []
+    elif isinstance(metadata, dict):
+        payload = metadata
+    else:
+        return []
+
+    raw_curve = payload.get("equity_curve") if isinstance(payload, dict) else None
+    if not isinstance(raw_curve, list):
+        return []
+
+    points: list[EquityPoint] = []
+    for entry in raw_curve:
+        if not isinstance(entry, dict):
+            continue
+        date = entry.get("date")
+        value = entry.get("value")
+        if not isinstance(date, str) or value is None:
+            continue
+        try:
+            points.append(EquityPoint(date=date, value=Decimal(str(value))))
+        except (ValueError, ArithmeticError):
+            continue
+    return points
+
+
 def _compute_aggregates(
     rows: Sequence[dict[str, Any]],
     active: Sequence[StrategyConfig],
@@ -63,12 +103,16 @@ def _compute_aggregates(
 
     Args:
         rows: One row per active strategy, each with keys ``strategy_id``,
-            ``total_value``, ``daily_return``.
+            ``total_value``, ``daily_return``, and ``metadata`` (JSONB or
+            already-parsed dict containing the strategy's full
+            ``equity_curve``).
         active: The active registry entries.
 
     Returns:
-        A :class:`SnapshotAggregates` with ``combined_drawdown=None`` — the
-        full equity-curve merger lands in Phase 4.
+        A :class:`SnapshotAggregates`. ``combined_drawdown`` is the float
+        returned by :func:`calculate_combined_drawdown` over the per-strategy
+        equity curves extracted from ``metadata``; it is ``None`` when no row
+        carries a usable curve (graceful degradation per ROADMAP §4.2).
     """
     weights: dict[str, Decimal] = {cfg.id: cfg.capital_weight for cfg in active}
     total_weight = sum(weights.values(), start=Decimal(0))
@@ -87,10 +131,26 @@ def _compute_aggregates(
         weighted_return = 0.0
         allocation = {sid: 0.0 for sid in weights}
 
+    curves: dict[str, list[EquityPoint]] = {}
+    for sid in weights:
+        row = rows_by_id.get(sid)
+        if row is None:
+            continue
+        curve = _extract_equity_curve(row.get("metadata"))
+        if curve:
+            curves[sid] = curve
+
+    if curves:
+        float_weights = {sid: float(weight) for sid, weight in weights.items()}
+        combined_drawdown: float | None = calculate_combined_drawdown(curves, float_weights)
+    else:
+        logger.info("snapshot writer: combined_drawdown unavailable — no equity curves in metadata")
+        combined_drawdown = None
+
     return SnapshotAggregates(
         total_portfolio=total_portfolio,
         weighted_return=weighted_return,
-        combined_drawdown=None,
+        combined_drawdown=combined_drawdown,
         active_strategies=len(active),
         allocation=allocation,
     )
