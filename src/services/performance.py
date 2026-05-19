@@ -65,12 +65,13 @@ def _row_to_strategy_performance(row: dict[str, Any]) -> StrategyPerformanceResp
     t = row["time"]
     last_updated = t if hasattr(t, "tzinfo") and t.tzinfo is not None else t.replace(tzinfo=UTC)
 
+    _DP4 = Decimal("0.0001")
     return StrategyPerformanceResponse(
         strategy_id=row["strategy_id"],
         daily_pnl=daily_pnl,
-        total_value=Decimal(str(row["total_value"])),
-        max_drawdown=Decimal(str(row["max_drawdown"])),
-        sharpe_ratio=Decimal(str(row["sharpe_ratio"])),
+        total_value=Decimal(str(row["total_value"])).quantize(_DP4),
+        max_drawdown=Decimal(str(row["max_drawdown"])).quantize(_DP4),
+        sharpe_ratio=Decimal(str(row["sharpe_ratio"])).quantize(_DP4),
         last_updated=last_updated,
     )
 
