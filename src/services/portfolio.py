@@ -13,7 +13,7 @@ from src.schemas.registry import StrategyRegistry
 from src.schemas.strategy import EquityPoint
 from src.services.aggregator import merge_equity_curves
 from src.services.errors import ServiceError
-from src.services.snapshot_writer import _extract_equity_curve
+from src.services.snapshot_writer import _extract_equity_curve, build_equity_curve_from_rows
 
 logger = logging.getLogger(__name__)
 
@@ -130,15 +130,20 @@ async def compute_portfolio_equity_curve(
     try:
         async with pool.acquire() as conn:
             rows = await conn.fetch(_LATEST_PER_STRATEGY_FOR_EQUITY_SQL, active_ids)
+
+            curves: dict[str, list[EquityPoint]] = {}
+            for row in rows:
+                r = dict(row)
+                curve = _extract_equity_curve(r.get("metadata"))
+                if curve:
+                    curves[r["strategy_id"]] = curve
+                else:
+                    # Fallback: reconstruct from daily_performance rows
+                    fallback = await build_equity_curve_from_rows(conn, r["strategy_id"])
+                    if fallback:
+                        curves[r["strategy_id"]] = fallback
     except asyncpg.PostgresError as exc:
         raise ServiceError("failed to query daily_performance for equity curves") from exc
-
-    curves: dict[str, list[EquityPoint]] = {}
-    for row in rows:
-        r = dict(row)
-        curve = _extract_equity_curve(r.get("metadata"))
-        if curve:
-            curves[r["strategy_id"]] = curve
 
     if not curves:
         return []

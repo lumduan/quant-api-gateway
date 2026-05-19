@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, status
 from src.db.postgres import get_pool
 from src.schemas.registry import StrategyConfig
 from src.schemas.strategy import EquityPoint
-from src.services.snapshot_writer import _extract_equity_curve
+from src.services.snapshot_writer import _extract_equity_curve, build_equity_curve_from_rows
 from src.services.strategy_registry import get_registry
 
 logger = logging.getLogger(__name__)
@@ -90,4 +90,9 @@ async def get_strategy_equity_curve(strategy_id: str) -> list[EquityPoint]:
         return []
 
     curve = _extract_equity_curve(dict(row).get("metadata"))
-    return curve if curve else []
+    if curve:
+        return curve
+
+    # Fallback: reconstruct curve from daily_performance rows
+    async with pool.acquire() as conn:
+        return await build_equity_curve_from_rows(conn, strategy_id)

@@ -17,7 +17,7 @@ from src.schemas.registry import StrategyRegistry
 from src.schemas.strategy import EquityPoint
 from src.services.aggregator import calculate_combined_drawdown, calculate_weighted_return
 from src.services.errors import ServiceError
-from src.services.snapshot_writer import _extract_equity_curve
+from src.services.snapshot_writer import _extract_equity_curve, build_equity_curve_from_rows
 
 logger = logging.getLogger(__name__)
 
@@ -106,16 +106,20 @@ async def compute_overall_performance(
         try:
             async with pool.acquire() as conn:
                 rows = await conn.fetch(_LATEST_PER_STRATEGY_SQL, active_ids)
+
+                for row in rows:
+                    r = dict(row)
+                    sp = _row_to_strategy_performance(r)
+                    strategies.append(sp)
+                    curve = _extract_equity_curve(r.get("metadata"))
+                    if curve:
+                        curves[sp.strategy_id] = curve
+                    else:
+                        fallback = await build_equity_curve_from_rows(conn, sp.strategy_id)
+                        if fallback:
+                            curves[sp.strategy_id] = fallback
         except asyncpg.PostgresError as exc:
             raise ServiceError("failed to query daily_performance for overall aggregation") from exc
-
-        for row in rows:
-            r = dict(row)
-            sp = _row_to_strategy_performance(r)
-            strategies.append(sp)
-            curve = _extract_equity_curve(r.get("metadata"))
-            if curve:
-                curves[sp.strategy_id] = curve
 
     total_portfolio_value = sum(s.total_value for s in strategies)
     weighted_return = calculate_weighted_return(strategies, weights) if strategies else Decimal("0")

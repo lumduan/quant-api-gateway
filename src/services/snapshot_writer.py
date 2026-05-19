@@ -99,6 +99,36 @@ def _extract_equity_curve(metadata: Any) -> list[EquityPoint]:
     return points
 
 
+_CURVE_FROM_ROWS_SQL = """
+SELECT time::date AS date, total_value
+FROM daily_performance
+WHERE strategy_id = $1
+ORDER BY time ASC
+"""
+
+
+async def build_equity_curve_from_rows(
+    conn: asyncpg.Connection,
+    strategy_id: str,
+) -> list[EquityPoint]:
+    """Build an equity curve from ``daily_performance`` rows.
+
+    Fallback when ``metadata.equity_curve`` is missing — queries every row
+    for *strategy_id* ordered by time and returns ``EquityPoint`` objects
+    built from ``time::date`` and ``total_value``.
+    """
+    rows = await conn.fetch(_CURVE_FROM_ROWS_SQL, strategy_id)
+    points: list[EquityPoint] = []
+    for row in rows:
+        try:
+            points.append(
+                EquityPoint(date=str(row["date"]), value=Decimal(str(row["total_value"])))
+            )
+        except (ValueError, ArithmeticError):
+            continue
+    return points
+
+
 def _compute_aggregates(
     rows: Sequence[dict[str, Any]],
     active: Sequence[StrategyConfig],
