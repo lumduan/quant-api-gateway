@@ -1,7 +1,7 @@
 {
   "strategies": [
     {
-      "id": "csm-set-01",
+      "id": "csm-set",
       "name": "CSM SET Strategy",
       "service_url": "http://csm:8000",
       "capital_weight": 1.0,
