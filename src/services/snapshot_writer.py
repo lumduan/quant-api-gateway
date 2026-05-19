@@ -129,7 +129,6 @@ async def build_equity_curve_from_rows(
     return points
 
 
-
 def _compute_aggregates(
     rows: Sequence[dict[str, Any]],
     active: Sequence[StrategyConfig],
