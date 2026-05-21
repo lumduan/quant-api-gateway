@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from httpx import AsyncClient
+from src.db import csm_set_postgres as csm_pg
 from src.db import postgres as pg
 from src.main import app, lifespan
 from src.services import strategy_registry
@@ -33,8 +34,10 @@ async def test_lifespan_runs_startup_and_shutdown(
     the lifespan protocol; the manual ``async with`` here exercises both
     the ``yield`` and ``finally`` branches.
     """
-    # Set the pool global directly so close_pool() exercises its else-branch.
+    # Set the pool globals directly so close_*() exercises the else-branch
+    # and no real network resolution is attempted on startup.
     monkeypatch.setattr(pg, "_pool", mock_pool)
+    monkeypatch.setattr(csm_pg, "_pool", mock_pool)
     mock_pool.close = AsyncMock(return_value=None)
 
     async with lifespan(app):

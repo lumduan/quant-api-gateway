@@ -95,3 +95,65 @@ def test_key_constants() -> None:
     assert ci.STRATEGY_PERFORMANCE_PREFIX == "strategy:"
     assert ci.STRATEGY_PERFORMANCE_SUFFIX == ":performance"
     assert ci.GATEWAY_CACHE_PATTERN == "gateway:*"
+
+
+# ---- per-strategy report-bundle invalidators (feature-strategies-report-metrics)
+
+
+async def test_invalidate_strategy_report_keys_pattern(
+    mock_invalidate_pattern: AsyncMock,
+) -> None:
+    await ci.invalidate_strategy_report_keys("csm-set-01")
+    mock_invalidate_pattern.assert_awaited_once_with("gateway:strategy:csm-set-01:report:*")
+
+
+async def test_invalidate_strategy_report_keys_never_raises(
+    mock_invalidate_pattern: AsyncMock, caplog: Any
+) -> None:
+    caplog.set_level(logging.ERROR)
+    mock_invalidate_pattern.side_effect = CacheError("redis down")
+    # Must NOT raise.
+    await ci.invalidate_strategy_report_keys("csm-set-01")
+    assert any("failed to invalidate pattern" in m for m in caplog.messages)
+
+
+async def test_invalidate_strategy_trade_keys_pattern(
+    mock_invalidate_pattern: AsyncMock,
+) -> None:
+    await ci.invalidate_strategy_trade_keys("csm-set-01")
+    mock_invalidate_pattern.assert_awaited_once_with("gateway:strategy:csm-set-01:trades:*")
+
+
+async def test_invalidate_strategy_trade_keys_never_raises(
+    mock_invalidate_pattern: AsyncMock,
+) -> None:
+    mock_invalidate_pattern.side_effect = RedisConnectionError("down")
+    await ci.invalidate_strategy_trade_keys("csm-set-01")
+
+
+async def test_invalidate_strategy_benchmark_keys_pattern(
+    mock_invalidate_pattern: AsyncMock,
+) -> None:
+    await ci.invalidate_strategy_benchmark_keys("csm-set-01")
+    mock_invalidate_pattern.assert_awaited_once_with("gateway:strategy:csm-set-01:benchmark:*")
+
+
+async def test_invalidate_strategy_benchmark_keys_never_raises(
+    mock_invalidate_pattern: AsyncMock,
+) -> None:
+    mock_invalidate_pattern.side_effect = Exception("unexpected")
+    await ci.invalidate_strategy_benchmark_keys("csm-set-01")
+
+
+async def test_invalidate_strategy_report_bundle_runs_all_three(
+    mock_invalidate_pattern: AsyncMock,
+) -> None:
+    """The bundle helper invokes every pattern in one await."""
+    await ci.invalidate_strategy_report_bundle("csm-set-01")
+
+    patterns = [c.args[0] for c in mock_invalidate_pattern.await_args_list]
+    assert patterns == [
+        "gateway:strategy:csm-set-01:report:*",
+        "gateway:strategy:csm-set-01:trades:*",
+        "gateway:strategy:csm-set-01:benchmark:*",
+    ]

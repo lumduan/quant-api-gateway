@@ -12,9 +12,31 @@ def test_settings_loads_from_env() -> None:
     assert settings.postgres_dsn.startswith("postgresql://")
     assert settings.mongo_uri.startswith("mongodb://")
     assert settings.redis_url.startswith("redis://")
+    assert settings.csm_set_dsn.startswith("postgresql://")
+    assert "db_csm_set" in settings.csm_set_dsn
     assert settings.csm_set_service_url.startswith("http://")
     assert settings.internal_api_key == "test-internal-api-key"
     assert settings.log_level == "INFO"
+
+
+def test_report_ttl_defaults() -> None:
+    """Strategy report / trade log / benchmark curve TTLs default to roadmap values."""
+    settings = get_settings()
+
+    assert settings.strategy_report_ttl_seconds == 600
+    assert settings.trade_log_ttl_seconds == 300
+    assert settings.benchmark_curve_ttl_seconds == 600
+
+
+def test_settings_rejects_missing_csm_set_dsn(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``CSM_SET_DSN`` is required — missing it surfaces as ``ValidationError``."""
+    monkeypatch.delenv("CSM_SET_DSN", raising=False)
+    get_settings.cache_clear()
+
+    with pytest.raises(ValidationError) as excinfo:
+        Settings(_env_file=None)  # type: ignore[call-arg]
+
+    assert "csm_set_dsn" in str(excinfo.value).lower()
 
 
 def test_log_level_defaults_to_info(monkeypatch: pytest.MonkeyPatch) -> None:

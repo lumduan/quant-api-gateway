@@ -1,8 +1,13 @@
+import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
+
+from src.schemas.strategy_report import StrategyReport
+
+logger = logging.getLogger(__name__)
 
 
 class StrategyMetadata(BaseModel):
@@ -94,7 +99,19 @@ class CurrentExposure(BaseModel):
 
 
 class StrategyPayload(BaseModel):
-    """Standard JSON contract that every Strategy Service POSTs to the gateway."""
+    """Standard JSON contract that every Strategy Service POSTs to the gateway.
+
+    The ``extended_data`` blob is forward-compatible: any strategy may attach
+    arbitrary keys, and the gateway preserves them in the
+    ``daily_performance.metadata`` JSONB column. When a ``report`` key is
+    present, the post-init validator attempts to parse it through
+    :class:`~src.schemas.strategy_report.StrategyReport` and attaches the
+    parsed value to the private :attr:`_parsed_report` attribute so the
+    ingestion service can persist it into ``strategy_report_snapshot``
+    without re-parsing the dict. Invalid reports are not fatal — they log a
+    WARNING and leave :attr:`_parsed_report` as ``None`` so ingestion of the
+    base payload still succeeds.
+    """
 
     model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
 
@@ -107,3 +124,37 @@ class StrategyPayload(BaseModel):
         default_factory=dict,
         description="Strategy-specific extension data",
     )
+
+    _parsed_report: StrategyReport | None = PrivateAttr(default=None)
+
+    @model_validator(mode="after")
+    def _parse_extended_report(self) -> "StrategyPayload":
+        """Parse ``extended_data['report']`` into :class:`StrategyReport`.
+
+        Best-effort: any failure to coerce the report into the typed model is
+        logged at WARNING and the payload is accepted with
+        :attr:`_parsed_report` left as ``None``. This keeps ingestion
+        backward-compatible with strategies that have not yet emitted the
+        report block.
+
+        Returns:
+            ``self`` (Pydantic v2 convention for ``mode="after"`` validators).
+        """
+        raw = self.extended_data.get("report")
+        if raw is None:
+            return self
+        try:
+            self._parsed_report = StrategyReport.model_validate(raw)
+        except Exception as exc:  # noqa: BLE001 — degrade gracefully
+            logger.warning(
+                "extended_data.report failed to parse for strategy_id=%s: %s",
+                self.strategy_metadata.id,
+                exc,
+            )
+            self._parsed_report = None
+        return self
+
+    @property
+    def parsed_report(self) -> StrategyReport | None:
+        """Return the parsed :class:`StrategyReport`, or ``None`` if absent / invalid."""
+        return self._parsed_report

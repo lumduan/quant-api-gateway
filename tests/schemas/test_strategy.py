@@ -235,3 +235,134 @@ def test_equity_point_is_frozen() -> None:
     point = EquityPoint(date="2026-05-14", value=Decimal("1000.00"))
     with pytest.raises(ValidationError):
         point.value = Decimal("2000.00")
+
+
+# --- extended_data.report parsing -------------------------------------------
+
+
+def _report_dict() -> dict[str, object]:
+    """Build a minimal-but-valid ``StrategyReport`` JSON-like dict."""
+    side = {
+        "initial_capital": "200000.00",
+        "open_pnl": "0",
+        "net_pnl": "100.00",
+        "gross_profit": "200.00",
+        "gross_loss": "-100.00",
+        "profit_factor": "2.00",
+        "commission_paid": "5.00",
+        "expected_payoff": "10.00",
+    }
+    detail_side = {
+        "total_trades": 5,
+        "total_open_trades": 0,
+        "winning_trades": 3,
+        "losing_trades": 2,
+        "percent_profitable": "0.6000",
+        "avg_pnl": "20.00",
+        "avg_winning_trade": "50.00",
+        "avg_losing_trade": "-25.00",
+        "ratio_avg_win_avg_loss": "2.00",
+        "largest_winning_trade": "75.00",
+        "largest_winning_trade_pct": "0.0375",
+        "largest_winner_pct_of_gross_profit": "0.3750",
+        "largest_losing_trade": "-40.00",
+        "largest_losing_trade_pct": "-0.0200",
+        "largest_loser_pct_of_gross_loss": "0.4000",
+        "outliers_count": 0,
+        "outliers_pnl": "0",
+        "avg_bars_in_trades": "4.0",
+        "avg_bars_in_winning_trades": "4.5",
+        "avg_bars_in_losing_trades": "3.5",
+    }
+    capital_row = {
+        "annualized_return_cagr": "0.1000",
+        "return_on_initial_capital": "0.0500",
+        "account_size_required": "210000",
+        "return_on_account_size_required": "0.0476",
+        "net_profit_pct_of_largest_loss": "2.5",
+    }
+    return {
+        "as_of": "2026-05-14T12:00:00+00:00",
+        "currency": "THB",
+        "initial_capital": "200000.00",
+        "headline": {
+            "total_pnl": "100.00",
+            "total_pnl_pct": "0.0005",
+            "max_equity_drawdown": "-50.00",
+            "max_equity_drawdown_pct": "-0.00025",
+            "total_trades": 5,
+            "profitable_trades": 3,
+            "profitable_pct": "0.6000",
+            "profit_factor": "2.00",
+        },
+        "profit_structure": {
+            "total_profit": "200",
+            "open_pnl": "0",
+            "total_loss": "-100",
+            "commission": "-5",
+            "net_pnl": "95",
+        },
+        "returns": {"all": side, "long": side, "short": side},
+        "risk_adjusted": {"sharpe_ratio": "1.50", "sortino_ratio": "2.10"},
+        "trades_analysis": {
+            "pnl_distribution": [],
+            "win_loss_split": {"wins": 3, "losses": 2, "breakeven": 0},
+            "avg_loss_pct": "-0.0125",
+            "avg_profit_pct": "0.0167",
+        },
+        "details": {"all": detail_side, "long": detail_side, "short": detail_side},
+        "capital_efficiency": {
+            "capital_usage": {"all": capital_row, "long": capital_row, "short": capital_row},
+            "margin_usage": {},
+        },
+        "runups_drawdowns": {
+            "runups": {
+                "avg_duration_days": "1.5",
+                "avg_runup": "60.00",
+                "max_runup_close_to_close": "150.00",
+            },
+            "drawdowns": {
+                "avg_duration_days": "1.0",
+                "avg_drawdown": "-30.00",
+                "max_drawdown_close_to_close": "-50.00",
+                "return_of_max_drawdown": "-0.00025",
+            },
+        },
+        "trades": [],
+        "benchmark_equity_curve": [],
+    }
+
+
+def test_payload_parses_extended_report() -> None:
+    """When ``extended_data['report']`` is present and valid, it is parsed."""
+    payload = StrategyPayload(
+        strategy_metadata=_valid_metadata(),
+        performance_metrics=_valid_metrics(),
+        current_exposure=_valid_exposure(),
+        extended_data={"report": _report_dict()},
+    )
+
+    assert payload.parsed_report is not None
+    assert payload.parsed_report.headline.total_trades == 5
+
+
+def test_payload_without_report_has_none_parsed_report() -> None:
+    """Payloads with no ``report`` key parse cleanly with ``parsed_report = None``."""
+    payload = _valid_payload()
+    assert payload.parsed_report is None
+
+
+def test_payload_with_invalid_report_logs_and_continues(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An invalid ``report`` does not raise — payload is accepted, WARNING logged."""
+    with caplog.at_level("WARNING", logger="src.schemas.strategy"):
+        payload = StrategyPayload(
+            strategy_metadata=_valid_metadata(),
+            performance_metrics=_valid_metrics(),
+            current_exposure=_valid_exposure(),
+            extended_data={"report": {"totally": "wrong"}},
+        )
+
+    assert payload.parsed_report is None
+    assert any("extended_data.report failed to parse" in rec.message for rec in caplog.records)
