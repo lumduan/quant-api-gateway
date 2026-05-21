@@ -17,6 +17,7 @@ def _cfg(*, sid: str, weight: str, active: bool = True) -> StrategyConfig:
         {
             "id": sid,
             "name": sid,
+            "type": "EQUITY_MOMENTUM",
             "service_url": f"http://{sid}",
             "capital_weight": weight,
             "active": active,

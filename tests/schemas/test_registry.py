@@ -11,6 +11,7 @@ def _config(**overrides: object) -> StrategyConfig:
     base: dict[str, object] = {
         "id": "csm-set-01",
         "name": "CSM SET Strategy",
+        "type": "EQUITY_MOMENTUM",
         "service_url": "http://quant-csm-set:8001",
         "capital_weight": Decimal("1.0"),
         "active": True,
@@ -22,8 +23,26 @@ def _config(**overrides: object) -> StrategyConfig:
 def test_strategy_config_valid() -> None:
     cfg = _config()
     assert cfg.id == "csm-set-01"
+    assert cfg.type == "EQUITY_MOMENTUM"
     assert cfg.capital_weight == Decimal("1.0")
     assert cfg.active is True
+
+
+def test_strategy_config_missing_type_rejected() -> None:
+    with pytest.raises(ValidationError):
+        StrategyConfig.model_validate(
+            {
+                "id": "csm-set-01",
+                "name": "CSM SET Strategy",
+                "service_url": "http://quant-csm-set:8001",
+                "capital_weight": "1.0",
+            }
+        )
+
+
+def test_strategy_config_empty_type_rejected() -> None:
+    with pytest.raises(ValidationError):
+        _config(type="")
 
 
 def test_strategy_config_negative_weight_rejected() -> None:
@@ -41,6 +60,7 @@ def test_strategy_config_active_defaults_true() -> None:
         {
             "id": "csm-set-01",
             "name": "CSM SET Strategy",
+            "type": "EQUITY_MOMENTUM",
             "service_url": "http://quant-csm-set:8001",
             "capital_weight": "1.0",
         }

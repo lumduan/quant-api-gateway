@@ -3,6 +3,7 @@
     {
       "id": "csm-set",
       "name": "CSM SET Strategy",
+      "type": "EQUITY_MOMENTUM",
       "service_url": "http://csm:8000",
       "capital_weight": 1.0,
       "active": true

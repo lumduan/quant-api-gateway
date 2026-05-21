@@ -12,6 +12,15 @@ class StrategyConfig(BaseModel):
 
     id: str = Field(description="Unique strategy identifier", min_length=1)
     name: str = Field(description="Human-readable strategy name", min_length=1)
+    type: str = Field(
+        description=(
+            "Strategy type discriminator consumed by the dashboard's "
+            "StrategyAdapterFactory (e.g. ``EQUITY_MOMENTUM`` -> CSMSetAdapter). "
+            "Required so misconfigured registries fail at startup rather than "
+            "silently falling back to the generic adapter in the browser."
+        ),
+        min_length=1,
+    )
     service_url: str = Field(
         description="Base URL of the upstream Strategy Service",
         min_length=1,
