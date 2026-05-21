@@ -17,6 +17,11 @@ STRATEGY_PERFORMANCE_PREFIX = "strategy:"
 STRATEGY_PERFORMANCE_SUFFIX = ":performance"
 GATEWAY_CACHE_PATTERN = "gateway:*"
 
+# feature-strategies-report-metrics Phase 3 — per-strategy report cache patterns.
+STRATEGY_REPORT_PATTERN = "gateway:strategy:{id}:report:*"
+STRATEGY_TRADES_PATTERN = "gateway:strategy:{id}:trades:*"
+STRATEGY_BENCHMARK_PATTERN = "gateway:strategy:{id}:benchmark:*"
+
 
 async def invalidate_overall_cache() -> None:
     """Delete the ``overall_performance`` cache key (best-effort).
@@ -43,6 +48,48 @@ async def invalidate_strategy_cache(strategy_id: str) -> None:
         await invalidate_key(key)
     except Exception:
         logger.exception("failed to invalidate %s", key)
+
+
+async def invalidate_strategy_report_keys(strategy_id: str) -> None:
+    """SCAN-delete every ``gateway:strategy:{id}:report:*`` key (best-effort).
+
+    Called after every successful ingest so the next read recomputes
+    instead of serving a stale snapshot.
+    """
+    pattern = STRATEGY_REPORT_PATTERN.format(id=strategy_id)
+    try:
+        await invalidate_pattern(pattern)
+    except Exception:
+        logger.exception("failed to invalidate pattern %s", pattern)
+
+
+async def invalidate_strategy_trade_keys(strategy_id: str) -> None:
+    """SCAN-delete every ``gateway:strategy:{id}:trades:*`` key (best-effort)."""
+    pattern = STRATEGY_TRADES_PATTERN.format(id=strategy_id)
+    try:
+        await invalidate_pattern(pattern)
+    except Exception:
+        logger.exception("failed to invalidate pattern %s", pattern)
+
+
+async def invalidate_strategy_benchmark_keys(strategy_id: str) -> None:
+    """SCAN-delete every ``gateway:strategy:{id}:benchmark:*`` key (best-effort)."""
+    pattern = STRATEGY_BENCHMARK_PATTERN.format(id=strategy_id)
+    try:
+        await invalidate_pattern(pattern)
+    except Exception:
+        logger.exception("failed to invalidate pattern %s", pattern)
+
+
+async def invalidate_strategy_report_bundle(strategy_id: str) -> None:
+    """Invalidate every report-related cache pattern for *strategy_id*.
+
+    Wraps the three pattern invalidators in a single best-effort call so
+    the ingest path only needs one ``await``.
+    """
+    await invalidate_strategy_report_keys(strategy_id)
+    await invalidate_strategy_trade_keys(strategy_id)
+    await invalidate_strategy_benchmark_keys(strategy_id)
 
 
 async def flush_all() -> int:

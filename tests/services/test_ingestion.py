@@ -125,3 +125,38 @@ async def test_persist_daily_report_wraps_postgres_error(mock_pool: Any) -> None
     mock_pool._conn.execute.side_effect = asyncpg.PostgresError("boom")
     with pytest.raises(IngestionPersistError, match="failed to persist"):
         await ingest_mod.persist_daily_report(_payload(), pool=mock_pool)
+
+
+async def test_persist_daily_report_with_report_executes_both_upserts(
+    mock_pool: Any,
+) -> None:
+    """When the payload carries a parsed report, both UPSERTs run inside a tx."""
+    from tests.schemas.test_strategy import _report_dict
+
+    payload = _payload(extended_data={"report": _report_dict()})
+    assert payload.parsed_report is not None
+
+    await ingest_mod.persist_daily_report(payload, pool=mock_pool)
+
+    conn = mock_pool._conn
+    # One execute for daily_performance UPSERT, one for strategy_report_snapshot.
+    assert conn.execute.await_count == 2
+    sqls = [call.args[0] for call in conn.execute.await_args_list]
+    assert any("INSERT INTO daily_performance" in s for s in sqls)
+    assert any("strategy_report_snapshot" in s for s in sqls)
+    # Transaction wrapper was used.
+    conn.transaction.assert_called_once()
+
+
+async def test_persist_daily_report_report_failure_wrapped(mock_pool: Any) -> None:
+    """A failure on the report UPSERT surfaces as ``IngestionPersistError``."""
+    from tests.schemas.test_strategy import _report_dict
+
+    payload = _payload(extended_data={"report": _report_dict()})
+
+    # First execute (daily_performance) succeeds; second (report) fails.
+    conn = mock_pool._conn
+    conn.execute.side_effect = [None, asyncpg.PostgresError("report write failed")]
+
+    with pytest.raises(IngestionPersistError):
+        await ingest_mod.persist_daily_report(payload, pool=mock_pool)

@@ -15,6 +15,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 
 from src.api.v1.router import api_router
 from src.config import get_settings
+from src.db.csm_set_postgres import close_csm_set_pool, get_csm_set_pool
 from src.db.postgres import close_pool, get_pool
 from src.db.redis_client import close_redis, get_redis
 from src.logging_config import configure_logging, request_id_var
@@ -42,12 +43,14 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     registry = strategy_registry.load_registry(settings.strategy_registry_path)
     strategy_registry.set_registry(registry)
     await get_pool()
+    await get_csm_set_pool()
     await get_redis()
     try:
         yield
     finally:
         logger.info("quant-api-gateway shutting down")
         await close_pool()
+        await close_csm_set_pool()
         await close_redis()
         strategy_registry.clear_registry()
 

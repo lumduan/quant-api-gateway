@@ -33,6 +33,7 @@ _TEST_ENV: dict[str, str] = {
     "POSTGRES_DSN": "postgresql://postgres:test@quant-postgres:5432/db_gateway",
     "MONGO_URI": "mongodb://quant-mongo:27017/",
     "REDIS_URL": "redis://quant-redis:6379/0",
+    "CSM_SET_DSN": "postgresql://gateway_ro:test@quant-postgres:5432/db_csm_set",
     "CSM_SET_SERVICE_URL": "http://quant-csm-set:8001",
     "INTERNAL_API_KEY": "test-internal-api-key",
     "LOG_LEVEL": "INFO",
@@ -67,35 +68,67 @@ def load_test_registry() -> Iterator[None]:
         registry_mod.clear_registry()
 
 
+def _build_pool_mock(label: str) -> MagicMock:
+    """Construct an asyncpg.Pool-shaped MagicMock.
+
+    Factored out of :func:`mock_pool` so that each pool the test layer needs
+    (e.g. ``db_gateway`` and ``db_csm_set``) is its own independent mock.
+    Includes ``conn.transaction()`` as an async context manager so callers
+    that wrap writes in ``async with conn.transaction(): ...`` work
+    transparently.
+    """
+    conn = AsyncMock(name=f"{label}-connection")
+    conn.execute = AsyncMock(name=f"{label}-conn-execute")
+    conn.fetch = AsyncMock(name=f"{label}-conn-fetch", return_value=[])
+    conn.fetchrow = AsyncMock(name=f"{label}-conn-fetchrow", return_value=None)
+    conn.fetchval = AsyncMock(name=f"{label}-conn-fetchval", return_value=None)
+
+    tx_ctx = AsyncMock(name=f"{label}-tx-ctx")
+    tx_ctx.__aenter__ = AsyncMock(return_value=None)
+    tx_ctx.__aexit__ = AsyncMock(return_value=None)
+    conn.transaction = MagicMock(return_value=tx_ctx)
+
+    acquire_ctx = AsyncMock(name=f"{label}-acquire-ctx")
+    acquire_ctx.__aenter__ = AsyncMock(return_value=conn)
+    acquire_ctx.__aexit__ = AsyncMock(return_value=None)
+
+    pool = MagicMock(name=f"{label}-pool")
+    pool.acquire = MagicMock(return_value=acquire_ctx)
+    pool.execute = AsyncMock(name=f"{label}-pool-execute")
+    pool.fetch = AsyncMock(name=f"{label}-pool-fetch", return_value=[])
+    pool.fetchrow = AsyncMock(name=f"{label}-pool-fetchrow", return_value=None)
+    pool._conn = conn
+    return pool
+
+
 @pytest.fixture
 def mock_pool() -> MagicMock:
-    """Return an :class:`asyncpg.Pool`-shaped mock.
+    """Return an :class:`asyncpg.Pool`-shaped mock for ``db_gateway``.
 
     The returned object exposes:
 
     * ``pool.acquire()`` as an async context manager yielding a connection;
-    * ``conn.execute`` / ``conn.fetch`` as :class:`AsyncMock`s (assertable);
+    * ``conn.execute`` / ``conn.fetch`` / ``conn.fetchrow`` / ``conn.fetchval``
+      as :class:`AsyncMock`s (assertable);
+    * ``conn.transaction()`` as an async context manager so callers that wrap
+      writes in ``async with conn.transaction(): ...`` work transparently;
     * ``pool.execute`` / ``pool.fetch`` directly mocked too — both call styles
       are supported by ``asyncpg.Pool``.
 
     Tests can inspect call history via the standard ``mock.assert_*`` helpers.
     """
-    conn = AsyncMock(name="asyncpg-connection")
-    conn.execute = AsyncMock(name="conn-execute")
-    conn.fetch = AsyncMock(name="conn-fetch", return_value=[])
-    conn.fetchrow = AsyncMock(name="conn-fetchrow", return_value=None)
+    return _build_pool_mock("asyncpg")
 
-    acquire_ctx = AsyncMock(name="acquire-ctx")
-    acquire_ctx.__aenter__ = AsyncMock(return_value=conn)
-    acquire_ctx.__aexit__ = AsyncMock(return_value=None)
 
-    pool = MagicMock(name="asyncpg-pool")
-    pool.acquire = MagicMock(return_value=acquire_ctx)
-    pool.execute = AsyncMock(name="pool-execute")
-    pool.fetch = AsyncMock(name="pool-fetch", return_value=[])
-    pool.fetchrow = AsyncMock(name="pool-fetchrow", return_value=None)
-    pool._conn = conn
-    return pool
+@pytest.fixture
+def mock_csm_set_pool() -> MagicMock:
+    """Return an :class:`asyncpg.Pool`-shaped mock for ``db_csm_set``.
+
+    Mirrors :func:`mock_pool` but is an independent mock — tests can use
+    both fixtures simultaneously to assert that gateway-side reads target
+    the gateway pool and ``db_csm_set`` reads target this pool.
+    """
+    return _build_pool_mock("csm-set")
 
 
 @pytest_asyncio.fixture

@@ -19,6 +19,7 @@ import asyncpg
 
 from src.schemas.strategy import StrategyPayload
 from src.services.errors import IngestionPersistError
+from src.services.strategy_report_service import persist_report
 
 logger = logging.getLogger(__name__)
 
@@ -100,18 +101,29 @@ async def persist_daily_report(
     *,
     pool: asyncpg.Pool,
 ) -> None:
-    """Upsert ``payload`` into ``daily_performance``.
+    """Upsert ``payload`` into ``daily_performance`` (and, when present, the report).
+
+    The ``daily_performance`` UPSERT and the optional
+    ``strategy_report_snapshot`` UPSERT run inside a single
+    ``conn.transaction()`` so a report-write failure rolls back the day's
+    performance insert. This keeps the two rows atomic per strategy per day,
+    matching the umbrella feature roadmap's "atomic per strategy per day"
+    contract.
 
     Args:
-        payload: The validated input payload from a Strategy Service.
+        payload: The validated input payload from a Strategy Service. If
+            :attr:`StrategyPayload.parsed_report` is non-``None``, the
+            parsed report is also UPSERTed.
         pool: The asyncpg pool for ``db_gateway``.
 
     Raises:
-        IngestionPersistError: If the database rejects the write.
+        IngestionPersistError: If either write fails — both rows are rolled
+            back in that case.
     """
     row = _payload_to_row(payload)
+    report = payload.parsed_report
     try:
-        async with pool.acquire() as conn:
+        async with pool.acquire() as conn, conn.transaction():
             await conn.execute(
                 _UPSERT_SQL,
                 row["time"],
@@ -124,14 +136,31 @@ async def persist_daily_report(
                 row["sharpe_ratio"],
                 row["metadata_json"],
             )
+            if report is not None:
+                await persist_report(
+                    conn,
+                    strategy_id=row["strategy_id"],
+                    report=report,
+                    time=row["time"],
+                )
     except asyncpg.PostgresError as exc:
         logger.exception("daily_performance upsert failed for %s", row["strategy_id"])
         raise IngestionPersistError(
             f"failed to persist daily_performance for {row['strategy_id']}"
         ) from exc
+    except IngestionPersistError:
+        raise
+    except Exception as exc:
+        # persist_report wraps PostgresError in ServiceError — surface that
+        # too so the route layer can return a clean 500.
+        logger.exception("strategy_report_snapshot upsert failed for %s", row["strategy_id"])
+        raise IngestionPersistError(
+            f"failed to persist strategy_report for {row['strategy_id']}"
+        ) from exc
     logger.info(
-        "daily_performance upserted strategy_id=%s time=%s daily_return=%.6f",
+        "daily_performance upserted strategy_id=%s time=%s daily_return=%.6f report=%s",
         row["strategy_id"],
         row["time"].isoformat(),
         row["daily_return"],
+        report is not None,
     )

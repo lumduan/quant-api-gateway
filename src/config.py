@@ -82,6 +82,29 @@ class Settings(BaseSettings):
         default=3600,
         description="TTL in seconds for ``portfolio_snapshot:{date}`` cache keys.",
     )
+    csm_set_dsn: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Read-only PostgreSQL DSN for the ``db_csm_set`` database "
+            "provisioned by quant-infra-db. Used by the strategy-report "
+            "service to read ``trade_history`` and "
+            "``benchmark_equity_curve``. Example: "
+            "``postgresql://gateway_ro:pass@quant-postgres:5432/db_csm_set``."
+        ),
+    )
+    strategy_report_ttl_seconds: int = Field(
+        default=600,
+        description=("TTL in seconds for ``gateway:strategy:{id}:report:*`` cache keys."),
+    )
+    trade_log_ttl_seconds: int = Field(
+        default=300,
+        description=("TTL in seconds for ``gateway:strategy:{id}:trades:*`` cache keys."),
+    )
+    benchmark_curve_ttl_seconds: int = Field(
+        default=600,
+        description=("TTL in seconds for ``gateway:strategy:{id}:benchmark:*`` cache keys."),
+    )
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

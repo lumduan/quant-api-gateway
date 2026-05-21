@@ -16,6 +16,7 @@ from src.api.v1.dependencies import verify_api_key
 from src.db.postgres import get_pool
 from src.schemas.strategy import StrategyPayload
 from src.services import ingestion, snapshot_writer
+from src.services.cache_invalidator import invalidate_strategy_report_bundle
 from src.services.errors import IngestionPersistError, ServiceError
 from src.services.strategy_registry import get_registry
 
@@ -69,6 +70,10 @@ async def ingest_daily_report(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="failed to persist daily report",
         ) from exc
+
+    # Best-effort: never let report-bundle cache invalidation failure block
+    # the ingest acknowledgement.
+    await invalidate_strategy_report_bundle(strategy_id)
 
     # Best-effort: never let snapshot failure block ingest acknowledgement.
     try:
