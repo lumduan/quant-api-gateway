@@ -14,6 +14,7 @@ from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 from src.api.v1.router import api_router
+from src.api.v2.router import api_router as v2_api_router
 from src.config import get_settings
 from src.db.csm_set_postgres import close_csm_set_pool, get_csm_set_pool
 from src.db.postgres import close_pool, get_pool
@@ -119,3 +120,4 @@ async def health() -> dict[str, str]:
 
 app.add_middleware(RequestIDMiddleware)
 app.include_router(api_router, prefix="/api/v1")
+app.include_router(v2_api_router, prefix="/api/v2")
