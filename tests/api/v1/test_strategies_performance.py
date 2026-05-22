@@ -158,6 +158,7 @@ async def test_inactive_strategy_returns_404(
             StrategyConfig(
                 id="csm-set-01",
                 name="Inactive CSM SET",
+                type="EQUITY_MOMENTUM",
                 service_url="http://localhost:8001",
                 capital_weight=Decimal("0.6"),
                 active=False,

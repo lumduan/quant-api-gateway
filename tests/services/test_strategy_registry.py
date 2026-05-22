@@ -26,6 +26,7 @@ def test_load_registry_happy_path(tmp_path: Path) -> None:
             {
                 "id": "csm-set-01",
                 "name": "CSM SET Strategy",
+                "type": "EQUITY_MOMENTUM",
                 "service_url": "http://quant-csm-set:8001",
                 "capital_weight": "1.0",
                 "active": True,
@@ -85,6 +86,7 @@ def test_set_and_clear_roundtrip() -> None:
                 {
                     "id": "x",
                     "name": "x",
+                    "type": "EQUITY_MOMENTUM",
                     "service_url": "http://x",
                     "capital_weight": "0.5",
                 }

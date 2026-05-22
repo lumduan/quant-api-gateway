@@ -41,7 +41,9 @@ async def test_list_strategies_returns_active_only(
     assert "legacy-00" not in ids
     # Schema fields are present
     for entry in body:
-        assert {"id", "name", "service_url", "capital_weight", "active"} <= entry.keys()
+        assert {"id", "name", "type", "service_url", "capital_weight", "active"} <= entry.keys()
+    csm = next(entry for entry in body if entry["id"] == "csm-set-01")
+    assert csm["type"] == "EQUITY_MOMENTUM"
 
 
 async def test_list_strategies_requires_no_auth(
@@ -67,6 +69,7 @@ async def test_get_strategy_by_id_found(
     body = response.json()
     assert body["id"] == "csm-set-01"
     assert body["name"] == "CSM SET Strategy"
+    assert body["type"] == "EQUITY_MOMENTUM"
 
 
 async def test_get_strategy_by_id_not_found(
