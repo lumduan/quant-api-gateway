@@ -14,7 +14,9 @@ from src.api.v1.strategies import _LATEST_SINGLE_STRATEGY_SQL as _SINGLE_STRATEG
 from src.config import get_settings
 from src.db.postgres import get_pool
 from src.schemas.gateway import (
+    MetricItem,
     OverallPerformanceResponse,
+    PortfolioMetricsResponse,
     PortfolioSnapshotResponse,
     StrategyPerformanceResponse,
 )
@@ -28,8 +30,10 @@ from src.services.performance import (
     compute_strategy_performance_range,
 )
 from src.services.portfolio import (
+    build_metrics_response,
     compute_portfolio_equity_curve,
     query_latest_snapshot,
+    query_previous_snapshot,
     query_snapshot_by_date,
 )
 from src.services.snapshot_writer import _extract_equity_curve, build_equity_curve_from_rows
@@ -119,6 +123,131 @@ async def get_snapshot_by_date_v2(snapshot_date: date) -> PortfolioSnapshotRespo
         logger.warning("cache set failed for %s; serving uncached result", cache_key)
 
     return result
+
+
+# --------------------------------------------------------------------------- #
+# Portfolio metrics endpoints (OpenBB Metric widget)                          #
+# --------------------------------------------------------------------------- #
+
+
+@router.get(
+    "/metrics",
+    response_model=list[MetricItem],
+    summary="Portfolio metrics formatted for OpenBB Metric widget (v2)",
+)
+async def get_latest_metrics_v2(
+    snapshot_date: date | None = Query(
+        default=None,
+        description=(
+            "Optional date — when omitted, returns the latest snapshot. When supplied, "
+            "behaves identically to ``GET /metrics/{snapshot_date}``. The query-param "
+            "form exists so OpenBB widget ``params`` work without URL templating."
+        ),
+    ),
+) -> list[MetricItem]:
+    """Return portfolio metrics as an OpenBB Metric widget array.
+
+    Response shape matches https://docs.openbb.co/workspace/developers/widget-types/metric
+    — a top-level array of ``{label, value, delta}`` objects. The widget renders
+    arrows and colors from the sign of ``delta``.
+    """
+    if snapshot_date is not None:
+        return await get_metrics_by_date_v2(snapshot_date)
+
+    settings = get_settings()
+    cached = await get_cached("portfolio_metrics:latest", PortfolioMetricsResponse)
+    if cached is not None:
+        return list(cached.metrics)
+
+    pool = await get_pool()
+    try:
+        current = await query_latest_snapshot(pool)
+    except ServiceError as exc:
+        logger.exception("failed to query latest portfolio snapshot for metrics")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to query portfolio snapshot",
+        ) from exc
+
+    if current is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No portfolio snapshots available",
+        )
+
+    try:
+        previous = await query_previous_snapshot(pool, current.snapshot_date)
+    except ServiceError as exc:
+        logger.exception("failed to query previous portfolio snapshot for metrics")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to query previous portfolio snapshot",
+        ) from exc
+
+    result = build_metrics_response(current, previous)
+
+    try:
+        await set_cached(
+            "portfolio_metrics:latest", result, settings.portfolio_snapshot_ttl_seconds
+        )
+    except CacheError:
+        logger.warning("cache set failed for portfolio_metrics:latest; serving uncached result")
+
+    return list(result.metrics)
+
+
+@router.get(
+    "/metrics/{snapshot_date}",
+    response_model=list[MetricItem],
+    summary="Portfolio metrics for a specific date (v2)",
+    responses={404: {"description": "No snapshot for that date"}},
+)
+async def get_metrics_by_date_v2(snapshot_date: date) -> list[MetricItem]:
+    """Return the portfolio metrics for *snapshot_date* as an OpenBB widget array."""
+    settings = get_settings()
+    cache_key = f"portfolio_metrics:{snapshot_date.isoformat()}"
+    cached = await get_cached(cache_key, PortfolioMetricsResponse)
+    if cached is not None:
+        return list(cached.metrics)
+
+    pool = await get_pool()
+    try:
+        current = await query_snapshot_by_date(pool, snapshot_date)
+    except ServiceError as exc:
+        logger.exception(
+            "failed to query portfolio snapshot for metrics on %s", snapshot_date.isoformat()
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to query portfolio snapshot for {snapshot_date.isoformat()}",
+        ) from exc
+
+    if current is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No portfolio snapshot for {snapshot_date.isoformat()}",
+        )
+
+    try:
+        previous = await query_previous_snapshot(pool, current.snapshot_date)
+    except ServiceError as exc:
+        logger.exception(
+            "failed to query previous portfolio snapshot for metrics on %s",
+            snapshot_date.isoformat(),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to query previous portfolio snapshot",
+        ) from exc
+
+    result = build_metrics_response(current, previous)
+
+    try:
+        await set_cached(cache_key, result, settings.portfolio_snapshot_ttl_seconds)
+    except CacheError:
+        logger.warning("cache set failed for %s; serving uncached result", cache_key)
+
+    return list(result.metrics)
 
 
 # --------------------------------------------------------------------------- #

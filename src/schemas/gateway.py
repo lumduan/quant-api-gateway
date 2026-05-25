@@ -109,3 +109,51 @@ class PortfolioSnapshotResponse(BaseModel):
         description="Map of strategy_id to normalized capital weight"
     )
     computed_at: datetime = Field(description="UTC timestamp when the snapshot row was written")
+
+
+class MetricItem(BaseModel):
+    """One metric record, shaped for OpenBB's Metric widget.
+
+    Follows https://docs.openbb.co/workspace/developers/widget-types/metric.
+    The widget renders arrows and colors from the sign of ``delta``; this
+    payload carries only pre-formatted strings.
+    """
+
+    model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
+
+    label: str = Field(description="Human-readable metric name", min_length=1)
+    value: str = Field(
+        description=(
+            "Pre-formatted value cell (units embedded, no arrows). E.g. '0.63%', '$998,142.71'."
+        )
+    )
+    delta: str = Field(
+        default="",
+        description=(
+            "Pre-formatted delta cell — plain signed number, no unit, no arrow. "
+            "Empty string when no comparable previous snapshot exists, or when "
+            "the source field is null on either side."
+        ),
+    )
+
+
+class PortfolioMetricsResponse(BaseModel):
+    """Cache-internal wrapper around a list of :class:`MetricItem`.
+
+    The HTTP endpoint flattens this to a bare ``list[MetricItem]`` because
+    the Metric widget expects an array at the response root. The wrapper
+    preserves snapshot metadata for cache identity and debugging.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    snapshot_date: date = Field(description="Date of this metrics snapshot (YYYY-MM-DD)")
+    metrics: list[MetricItem] = Field(
+        description="Ordered metric items: Daily Return, Portfolio Drawdown, Total Portfolio Value"
+    )
+    computed_at: datetime = Field(description="UTC timestamp when this response was computed")
+
+    @field_validator("computed_at")
+    @classmethod
+    def _enforce_utc_metrics_computed_at(cls, v: datetime) -> datetime:
+        return _enforce_utc(v)

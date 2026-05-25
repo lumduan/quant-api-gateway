@@ -4,7 +4,8 @@ Covers parity between v1 and v2 endpoints, stub engine responses, and the
 engine catalog endpoint. Uses existing conftest.py fixtures exclusively.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -13,12 +14,15 @@ from httpx import AsyncClient
 from src.db import csm_set_postgres as csm_pg
 from src.db import postgres as pg
 from src.db import redis_client as rc
+from src.schemas.gateway import MetricItem, PortfolioMetricsResponse
 from src.schemas.registry import StrategyRegistry
 from src.schemas.strategy_report import (
     StrategyReport,
     StrategyReportResponse,
     TradeLogPage,
 )
+from src.services.errors import CacheError
+from src.utils.formatting import format_currency, format_delta_number, format_percentage
 
 from tests.schemas.test_strategy import _report_dict
 
@@ -569,3 +573,382 @@ async def test_v2_list_strategies_empty_registry(
 
     assert response.status_code == 200
     assert response.json() == []
+
+
+# --------------------------------------------------------------------------- #
+# Formatting utility (src/utils/formatting.py)                                #
+# --------------------------------------------------------------------------- #
+
+
+def test_format_percentage_positive() -> None:
+    assert format_percentage(Decimal("0.006262")) == "↑ +0.63%"
+
+
+def test_format_percentage_negative() -> None:
+    assert format_percentage(Decimal("-0.005")) == "↓ -0.50%"
+
+
+def test_format_percentage_zero() -> None:
+    assert format_percentage(Decimal("0")) == "→ 0.00%"
+
+
+def test_format_percentage_rounding_half_up() -> None:
+    """0.0199999 → 1.99999% → round-half-up → 2.00% → ``↑ +2.00%``."""
+    assert format_percentage(Decimal("0.0199999")) == "↑ +2.00%"
+
+
+def test_format_percentage_no_arrows_positive() -> None:
+    """No-arrows mode matches OpenBB Metric widget value cell: no leading + for positives."""
+    assert format_percentage(Decimal("0.005"), use_arrows=False) == "0.50%"
+
+
+def test_format_percentage_no_arrows_negative() -> None:
+    assert format_percentage(Decimal("-0.005"), use_arrows=False) == "-0.50%"
+
+
+def test_format_percentage_no_arrows_zero() -> None:
+    assert format_percentage(Decimal("0"), use_arrows=False) == "0.00%"
+
+
+def test_format_percentage_custom_decimals() -> None:
+    assert format_percentage(Decimal("0.123456"), decimals=4) == "↑ +12.3456%"
+
+
+def test_format_currency_basic() -> None:
+    assert format_currency(Decimal("998142.7124")) == "$998,142.71"
+
+
+def test_format_currency_large_rounds_up() -> None:
+    assert format_currency(Decimal("999999999.999")) == "$1,000,000,000.00"
+
+
+def test_format_currency_negative_sign_before_dollar() -> None:
+    assert format_currency(Decimal("-1234.5")) == "-$1,234.50"
+
+
+def test_format_currency_zero() -> None:
+    assert format_currency(Decimal("0")) == "$0.00"
+
+
+def test_format_delta_number_positive() -> None:
+    assert format_delta_number(Decimal("0.12")) == "0.12"
+
+
+def test_format_delta_number_negative() -> None:
+    assert format_delta_number(Decimal("-0.12")) == "-0.12"
+
+
+def test_format_delta_number_zero() -> None:
+    assert format_delta_number(Decimal("0")) == "0.00"
+
+
+def test_format_delta_number_currency_amount_no_separator() -> None:
+    """Delta cell has no thousands separator per OpenBB widget example."""
+    assert format_delta_number(Decimal("6234.10")) == "6234.10"
+
+
+def test_format_delta_number_rounding_half_up() -> None:
+    assert format_delta_number(Decimal("0.125")) == "0.13"
+
+
+# --------------------------------------------------------------------------- #
+# Portfolio metrics endpoint (v2)                                             #
+# --------------------------------------------------------------------------- #
+
+
+def _make_metrics_snapshot_row(
+    total_portfolio: float = 998142.7124,
+    weighted_return: float = 0.006262,
+    combined_drawdown: float | None = -0.0422,
+    active_strategies: int = 1,
+    time: datetime | None = None,
+) -> dict[str, Any]:
+    t = time or datetime(2026, 5, 22, 11, 0, 0, tzinfo=UTC)
+    return {
+        "time": t,
+        "total_portfolio": total_portfolio,
+        "weighted_return": weighted_return,
+        "combined_drawdown": combined_drawdown,
+        "active_strategies": active_strategies,
+        "allocation": '{"csm-set-01": 1.0}',
+    }
+
+
+async def test_get_metrics_latest_with_previous_populates_delta(
+    async_client: AsyncClient,
+    patch_lifespan_deps: None,
+    load_test_registry: None,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_pool: Any,
+) -> None:
+    """Latest metrics endpoint returns OpenBB-shape array with plain signed deltas."""
+    monkeypatch.setattr("src.api.v2.engines.portfolio.get_cached", AsyncMock(return_value=None))
+    monkeypatch.setattr("src.api.v2.engines.portfolio.set_cached", AsyncMock())
+
+    current = _make_metrics_snapshot_row(
+        total_portfolio=998142.7124, weighted_return=0.006262, combined_drawdown=-0.0422
+    )
+    previous = _make_metrics_snapshot_row(
+        total_portfolio=991908.6124,
+        weighted_return=0.0075,
+        combined_drawdown=-0.0410,
+        time=datetime(2026, 5, 21, 11, 0, 0, tzinfo=UTC),
+    )
+    mock_pool._conn.fetchrow = AsyncMock(side_effect=[current, previous])
+
+    response = await async_client.get("/api/v2/engines/portfolio/metrics")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body, list)
+    assert len(body) == 3
+
+    daily, drawdown, total = body
+    assert daily["label"] == "Daily Return"
+    assert daily["value"] == "0.63%"
+    assert daily["delta"] == "-0.12"
+
+    assert drawdown["label"] == "Portfolio Drawdown"
+    assert drawdown["value"] == "-4.22%"
+    assert drawdown["delta"] == "-0.12"
+
+    assert total["label"] == "Total Portfolio Value"
+    assert total["value"] == "$998,142.71"
+    assert total["delta"] == "6234.10"
+
+
+async def test_get_metrics_query_param_snapshot_date_routes_to_by_date(
+    async_client: AsyncClient,
+    patch_lifespan_deps: None,
+    load_test_registry: None,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_pool: Any,
+) -> None:
+    """``GET /metrics?snapshot_date=YYYY-MM-DD`` delegates to the by-date logic.
+
+    Exists so OpenBB widget ``params`` (which always emit query strings) hit
+    the same code path as the RESTful ``/metrics/{snapshot_date}`` route.
+    """
+    monkeypatch.setattr("src.api.v2.engines.portfolio.get_cached", AsyncMock(return_value=None))
+    monkeypatch.setattr("src.api.v2.engines.portfolio.set_cached", AsyncMock())
+
+    current = _make_metrics_snapshot_row()
+    mock_pool._conn.fetchrow = AsyncMock(side_effect=[current, None])
+
+    response = await async_client.get("/api/v2/engines/portfolio/metrics?snapshot_date=2026-05-22")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body, list)
+    assert body[0]["label"] == "Daily Return"
+
+
+async def test_get_metrics_by_date_no_previous_snapshot(
+    async_client: AsyncClient,
+    patch_lifespan_deps: None,
+    load_test_registry: None,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_pool: Any,
+) -> None:
+    """When no previous snapshot exists, every delta is the empty string."""
+    monkeypatch.setattr("src.api.v2.engines.portfolio.get_cached", AsyncMock(return_value=None))
+    monkeypatch.setattr("src.api.v2.engines.portfolio.set_cached", AsyncMock())
+
+    current = _make_metrics_snapshot_row()
+    mock_pool._conn.fetchrow = AsyncMock(side_effect=[current, None])
+
+    response = await async_client.get("/api/v2/engines/portfolio/metrics/2026-05-22")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert all(item["delta"] == "" for item in body)
+    assert body[0]["value"] == "0.63%"
+
+
+async def test_get_metrics_null_drawdown_renders_na(
+    async_client: AsyncClient,
+    patch_lifespan_deps: None,
+    load_test_registry: None,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_pool: Any,
+) -> None:
+    """A null ``combined_drawdown`` renders as ``N/A`` with an empty delta."""
+    monkeypatch.setattr("src.api.v2.engines.portfolio.get_cached", AsyncMock(return_value=None))
+    monkeypatch.setattr("src.api.v2.engines.portfolio.set_cached", AsyncMock())
+
+    current = _make_metrics_snapshot_row(combined_drawdown=None)
+    previous = _make_metrics_snapshot_row(
+        combined_drawdown=-0.0410, time=datetime(2026, 5, 21, 11, 0, 0, tzinfo=UTC)
+    )
+    mock_pool._conn.fetchrow = AsyncMock(side_effect=[current, previous])
+
+    response = await async_client.get("/api/v2/engines/portfolio/metrics")
+
+    assert response.status_code == 200
+    drawdown = response.json()[1]
+    assert drawdown["label"] == "Portfolio Drawdown"
+    assert drawdown["value"] == "N/A"
+    assert drawdown["delta"] == ""
+
+
+async def test_get_metrics_drawdown_delta_skipped_when_previous_null(
+    async_client: AsyncClient,
+    patch_lifespan_deps: None,
+    load_test_registry: None,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_pool: Any,
+) -> None:
+    """When the previous snapshot has null drawdown, drawdown delta is empty."""
+    monkeypatch.setattr("src.api.v2.engines.portfolio.get_cached", AsyncMock(return_value=None))
+    monkeypatch.setattr("src.api.v2.engines.portfolio.set_cached", AsyncMock())
+
+    current = _make_metrics_snapshot_row(combined_drawdown=-0.0422)
+    previous = _make_metrics_snapshot_row(
+        combined_drawdown=None, time=datetime(2026, 5, 21, 11, 0, 0, tzinfo=UTC)
+    )
+    mock_pool._conn.fetchrow = AsyncMock(side_effect=[current, previous])
+
+    response = await async_client.get("/api/v2/engines/portfolio/metrics")
+
+    assert response.status_code == 200
+    drawdown = response.json()[1]
+    assert drawdown["value"] == "-4.22%"
+    assert drawdown["delta"] == ""
+
+
+async def test_get_metrics_latest_returns_404_when_no_snapshots(
+    async_client: AsyncClient,
+    patch_lifespan_deps: None,
+    load_test_registry: None,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_pool: Any,
+) -> None:
+    """Empty DB → 404 from /metrics."""
+    monkeypatch.setattr("src.api.v2.engines.portfolio.get_cached", AsyncMock(return_value=None))
+    monkeypatch.setattr("src.api.v2.engines.portfolio.set_cached", AsyncMock())
+    mock_pool._conn.fetchrow = AsyncMock(return_value=None)
+
+    response = await async_client.get("/api/v2/engines/portfolio/metrics")
+
+    assert response.status_code == 404
+
+
+async def test_get_metrics_by_date_returns_404_when_missing(
+    async_client: AsyncClient,
+    patch_lifespan_deps: None,
+    load_test_registry: None,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_pool: Any,
+) -> None:
+    """Missing snapshot for a specific date → 404."""
+    monkeypatch.setattr("src.api.v2.engines.portfolio.get_cached", AsyncMock(return_value=None))
+    monkeypatch.setattr("src.api.v2.engines.portfolio.set_cached", AsyncMock())
+    mock_pool._conn.fetchrow = AsyncMock(return_value=None)
+
+    response = await async_client.get("/api/v2/engines/portfolio/metrics/2030-01-01")
+
+    assert response.status_code == 404
+
+
+async def test_get_metrics_cache_hit_skips_db(
+    async_client: AsyncClient,
+    patch_lifespan_deps: None,
+    load_test_registry: None,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_pool: Any,
+) -> None:
+    """Cache hit returns the cached metrics array without touching Postgres."""
+    cached = PortfolioMetricsResponse(
+        snapshot_date=date(2026, 5, 22),
+        metrics=[
+            MetricItem(label="Daily Return", value="0.63%", delta=""),
+            MetricItem(label="Portfolio Drawdown", value="-4.22%", delta=""),
+            MetricItem(label="Total Portfolio Value", value="$998,142.71", delta=""),
+        ],
+        computed_at=datetime(2026, 5, 22, 11, 0, 0, tzinfo=UTC),
+    )
+    monkeypatch.setattr("src.api.v2.engines.portfolio.get_cached", AsyncMock(return_value=cached))
+    mock_pool._conn.fetchrow = AsyncMock(return_value=None)
+
+    response = await async_client.get("/api/v2/engines/portfolio/metrics")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body, list)
+    assert body[0]["value"] == "0.63%"
+    mock_pool._conn.fetchrow.assert_not_awaited()
+
+
+async def test_get_metrics_negative_portfolio_delta(
+    async_client: AsyncClient,
+    patch_lifespan_deps: None,
+    load_test_registry: None,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_pool: Any,
+) -> None:
+    """Portfolio value dropped vs previous → delta carries explicit minus."""
+    monkeypatch.setattr("src.api.v2.engines.portfolio.get_cached", AsyncMock(return_value=None))
+    monkeypatch.setattr("src.api.v2.engines.portfolio.set_cached", AsyncMock())
+
+    current = _make_metrics_snapshot_row(total_portfolio=991908.61)
+    previous = _make_metrics_snapshot_row(
+        total_portfolio=998142.71, time=datetime(2026, 5, 21, 11, 0, 0, tzinfo=UTC)
+    )
+    mock_pool._conn.fetchrow = AsyncMock(side_effect=[current, previous])
+
+    response = await async_client.get("/api/v2/engines/portfolio/metrics")
+
+    assert response.status_code == 200
+    total = response.json()[2]
+    assert total["delta"] == "-6234.10"
+
+
+async def test_get_metrics_zero_portfolio_delta(
+    async_client: AsyncClient,
+    patch_lifespan_deps: None,
+    load_test_registry: None,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_pool: Any,
+) -> None:
+    """Identical portfolio value vs previous → delta is ``"0.00"`` (no sign)."""
+    monkeypatch.setattr("src.api.v2.engines.portfolio.get_cached", AsyncMock(return_value=None))
+    monkeypatch.setattr("src.api.v2.engines.portfolio.set_cached", AsyncMock())
+
+    current = _make_metrics_snapshot_row(total_portfolio=998142.71, weighted_return=0.005)
+    previous = _make_metrics_snapshot_row(
+        total_portfolio=998142.71,
+        weighted_return=0.005,
+        time=datetime(2026, 5, 21, 11, 0, 0, tzinfo=UTC),
+    )
+    mock_pool._conn.fetchrow = AsyncMock(side_effect=[current, previous])
+
+    response = await async_client.get("/api/v2/engines/portfolio/metrics")
+
+    assert response.status_code == 200
+    total = response.json()[2]
+    assert total["delta"] == "0.00"
+
+
+async def test_get_metrics_cache_set_failure_degrades_gracefully(
+    async_client: AsyncClient,
+    patch_lifespan_deps: None,
+    load_test_registry: None,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_pool: Any,
+) -> None:
+    """A CacheError during set_cached still returns 200 with the fresh result."""
+    monkeypatch.setattr("src.api.v2.engines.portfolio.get_cached", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        "src.api.v2.engines.portfolio.set_cached",
+        AsyncMock(side_effect=CacheError("boom")),
+    )
+
+    current = _make_metrics_snapshot_row()
+    mock_pool._conn.fetchrow = AsyncMock(side_effect=[current, None])
+
+    response = await async_client.get("/api/v2/engines/portfolio/metrics")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body, list)
+    assert len(body) == 3
