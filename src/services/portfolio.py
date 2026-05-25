@@ -2,18 +2,23 @@
 
 import json
 import logging
-from datetime import UTC, date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
 import asyncpg
 
-from src.schemas.gateway import PortfolioSnapshotResponse
+from src.schemas.gateway import (
+    MetricItem,
+    PortfolioMetricsResponse,
+    PortfolioSnapshotResponse,
+)
 from src.schemas.registry import StrategyRegistry
 from src.schemas.strategy import EquityPoint
 from src.services.aggregator import merge_equity_curves
 from src.services.errors import ServiceError
 from src.services.snapshot_writer import _extract_equity_curve, build_equity_curve_from_rows
+from src.utils.formatting import format_currency, format_delta_number, format_percentage
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +35,15 @@ SELECT time, total_portfolio, weighted_return, combined_drawdown,
        active_strategies, allocation
 FROM portfolio_snapshot
 WHERE time::date = $1
+"""
+
+_PREVIOUS_SNAPSHOT_SQL = """
+SELECT time, total_portfolio, weighted_return, combined_drawdown,
+       active_strategies, allocation
+FROM portfolio_snapshot
+WHERE time::date < $1
+ORDER BY time DESC
+LIMIT 1
 """
 
 _LATEST_PER_STRATEGY_FOR_EQUITY_SQL = """
@@ -103,6 +117,94 @@ async def query_snapshot_by_date(
     if row is None:
         return None
     return _row_to_snapshot_response(dict(row))
+
+
+async def query_previous_snapshot(
+    pool: asyncpg.Pool, before_date: date
+) -> PortfolioSnapshotResponse | None:
+    """Return the most recent ``portfolio_snapshot`` strictly before *before_date*.
+
+    Used to compute day-over-day deltas; the previous row may be more than one
+    calendar day older when snapshots are sparse.
+
+    Raises:
+        ServiceError: If Postgres rejects the query.
+    """
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(_PREVIOUS_SNAPSHOT_SQL, before_date)
+    except asyncpg.PostgresError as exc:
+        raise ServiceError(
+            f"failed to query previous portfolio_snapshot before {before_date.isoformat()}"
+        ) from exc
+
+    if row is None:
+        return None
+    return _row_to_snapshot_response(dict(row))
+
+
+_PCT_TO_POINTS = Decimal(100)
+
+
+def build_metrics_response(
+    current: PortfolioSnapshotResponse,
+    previous: PortfolioSnapshotResponse | None,
+) -> PortfolioMetricsResponse:
+    """Compose the three Metric-widget items for *current* (vs *previous* for delta).
+
+    Output shape matches OpenBB's Metric widget verbatim: plain value cell
+    (units in `value`, no arrows) and a small delta cell (arrow + raw number,
+    no units). Metrics are emitted in fixed order so widget configs can rely
+    on positional indexes. Delta is ``None`` when no previous snapshot exists
+    or the source field is null on either side. Percentage deltas are pre-
+    scaled to percentage points so the widget shows ``↑ 0.12`` not ``↑ 0.0012``.
+    """
+    daily_return_delta = ""
+    if previous is not None:
+        daily_return_delta = format_delta_number(
+            (current.weighted_daily_return - previous.weighted_daily_return) * _PCT_TO_POINTS
+        )
+
+    if current.combined_drawdown is None:
+        drawdown_value = "N/A"
+        drawdown_delta = ""
+    else:
+        drawdown_value = format_percentage(current.combined_drawdown, use_arrows=False)
+        drawdown_delta = ""
+        if previous is not None and previous.combined_drawdown is not None:
+            drawdown_delta = format_delta_number(
+                (current.combined_drawdown - previous.combined_drawdown) * _PCT_TO_POINTS
+            )
+
+    value_delta = ""
+    if previous is not None:
+        value_delta = format_delta_number(
+            current.total_portfolio_value - previous.total_portfolio_value
+        )
+
+    metrics = [
+        MetricItem(
+            label="Daily Return",
+            value=format_percentage(current.weighted_daily_return, use_arrows=False),
+            delta=daily_return_delta,
+        ),
+        MetricItem(
+            label="Portfolio Drawdown",
+            value=drawdown_value,
+            delta=drawdown_delta,
+        ),
+        MetricItem(
+            label="Total Portfolio Value",
+            value=format_currency(current.total_portfolio_value),
+            delta=value_delta,
+        ),
+    ]
+
+    return PortfolioMetricsResponse(
+        snapshot_date=current.snapshot_date,
+        metrics=metrics,
+        computed_at=datetime.now(UTC),
+    )
 
 
 async def compute_portfolio_equity_curve(
