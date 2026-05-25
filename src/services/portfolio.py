@@ -55,8 +55,26 @@ ORDER BY strategy_id, time DESC
 """
 
 
+_TWO_PLACES = Decimal("0.01")
+_FOUR_PLACES = Decimal("0.0001")
+_SIX_PLACES = Decimal("0.000001")
+
+
+def _to_decimal(value: object, quant: Decimal | None = None) -> Decimal:
+    """Coerce *value* to Decimal and optionally quantize to *quant* places."""
+    d = Decimal(str(value))
+    if quant is not None:
+        d = d.quantize(quant)
+    return d
+
+
 def _row_to_snapshot_response(row: dict[str, Any]) -> PortfolioSnapshotResponse:
-    """Convert a ``portfolio_snapshot`` row into a :class:`PortfolioSnapshotResponse`."""
+    """Convert a ``portfolio_snapshot`` row into a :class:`PortfolioSnapshotResponse`.
+
+    Values are quantized to match the Pydantic model's ``decimal_places``
+    constraints, preventing validation errors from high-precision float data
+    written by the snapshot writer.
+    """
     allocation_raw = row.get("allocation")
     if isinstance(allocation_raw, str):
         allocation_raw = json.loads(allocation_raw)
@@ -68,15 +86,15 @@ def _row_to_snapshot_response(row: dict[str, Any]) -> PortfolioSnapshotResponse:
 
     return PortfolioSnapshotResponse(
         snapshot_date=computed_at.date(),
-        total_portfolio_value=Decimal(str(row["total_portfolio"])),
-        weighted_daily_return=Decimal(str(row["weighted_return"])),
+        total_portfolio_value=_to_decimal(row["total_portfolio"], _TWO_PLACES),
+        weighted_daily_return=_to_decimal(row["weighted_return"], _SIX_PLACES),
         combined_drawdown=(
-            Decimal(str(row["combined_drawdown"]))
+            _to_decimal(row["combined_drawdown"], _FOUR_PLACES)
             if row.get("combined_drawdown") is not None
             else None
         ),
         active_strategies=row["active_strategies"],
-        allocation={k: Decimal(str(v)) for k, v in allocation_raw.items()},
+        allocation={k: _to_decimal(v, _FOUR_PLACES) for k, v in allocation_raw.items()},
         computed_at=computed_at,
     )
 
