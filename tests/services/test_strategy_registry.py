@@ -98,3 +98,20 @@ def test_set_and_clear_roundtrip() -> None:
     registry_mod.clear_registry()
     with pytest.raises(StrategyRegistryLoadError):
         registry_mod.get_registry()
+
+
+def test_production_strategies_json_parses_with_expected_entries() -> None:
+    """The repo's production ``strategies.json`` must always parse cleanly
+    and contain the registered strategies. Guards against typos / missing
+    fields when adding a new strategy.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    reg = registry_mod.load_registry(repo_root / "strategies.json")
+    ids = {s.id for s in reg.strategies}
+    assert "csm-set" in ids
+    assert "tfex-s50-multi-tf-swing" in ids
+    tfex = reg.by_id("tfex-s50-multi-tf-swing")
+    assert tfex is not None
+    assert tfex.type == "TFEX_DERIVATIVES"
+    assert tfex.service_url == "http://quant-tfex-s50-multi-tf-swing:8000"
+    assert tfex.active is False  # paper-trading gate, not active yet
