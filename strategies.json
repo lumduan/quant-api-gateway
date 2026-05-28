@@ -7,6 +7,14 @@
       "service_url": "http://csm:8000",
       "capital_weight": 1.0,
       "active": true
+    },
+    {
+      "id": "tfex-s50-multi-tf-swing",
+      "name": "TFEX S50 Multi-Timeframe Swing",
+      "type": "TFEX_DERIVATIVES",
+      "service_url": "http://quant-tfex-s50-multi-tf-swing:8000",
+      "capital_weight": 1.0,
+      "active": false
     }
   ]
 }
