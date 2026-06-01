@@ -37,7 +37,10 @@ _STATIC_CATALOG: list[EngineEntry] = [
         slug="market-data",
         type="EXTERNAL",
         status="active",
-        description="Wraps settfex + tvkit for OHLCV/data fetching",
+        description=(
+            "Standalone quant-marketdata-engine (host :8300), gateway-proxied; "
+            "canonical OHLCV via settfex + tvkit"
+        ),
     ),
     EngineEntry(
         slug="backtest",

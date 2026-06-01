@@ -51,6 +51,19 @@ class Settings(BaseSettings):
             "``http://quant-csm-set:8001``."
         ),
     )
+    marketdata_engine_service_url: str = Field(
+        default="http://quant-marketdata-engine:8000",
+        description=(
+            "Base URL of the upstream Market Data engine that the gateway proxies "
+            "``/api/v2/engines/market-data/*`` to. Defaults to the in-network "
+            "service name; override only for local/host access."
+        ),
+    )
+    marketdata_engine_timeout_seconds: float = Field(
+        default=10.0,
+        gt=0,
+        description="Per-request timeout (seconds) for upstream Market Data engine calls.",
+    )
     internal_api_key: str = Field(
         ...,
         min_length=1,
