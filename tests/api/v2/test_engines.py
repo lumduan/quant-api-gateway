@@ -9,8 +9,10 @@ from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from httpx import AsyncClient
+from src.api.v2.engines import market_data as md
 from src.db import csm_set_postgres as csm_pg
 from src.db import postgres as pg
 from src.db import redis_client as rc
@@ -433,29 +435,151 @@ async def test_strategy_benchmark_v1_v2_parity(
 
 
 # --------------------------------------------------------------------------- #
-# Market-data stub endpoints                                                  #
+# Market-data proxy endpoints                                                 #
 # --------------------------------------------------------------------------- #
 
 
-async def test_market_data_health_returns_stub(async_client: AsyncClient) -> None:
-    """GET /api/v2/engines/market-data/health returns stub status."""
+class _FakeUpstream:
+    """Stand-in for the shared httpx client used by the market-data proxy."""
+
+    def __init__(
+        self, *, response: httpx.Response | None = None, exc: Exception | None = None
+    ) -> None:
+        self._response = response
+        self._exc = exc
+        self.calls: list[dict[str, Any]] = []
+
+    async def get(self, path: str, *, params: Any = None, headers: Any = None) -> httpx.Response:
+        self.calls.append(
+            {"path": path, "params": dict(params or {}), "headers": dict(headers or {})}
+        )
+        if self._exc is not None:
+            raise self._exc
+        assert self._response is not None
+        return self._response
+
+
+@pytest.fixture(autouse=True)
+def _reset_md_client() -> Any:
+    """Ensure no real upstream client leaks across market-data proxy tests."""
+    md._client = None
+    yield
+    md._client = None
+
+
+def _patch_upstream(monkeypatch: pytest.MonkeyPatch, fake: _FakeUpstream) -> None:
+    monkeypatch.setattr(md, "_get_client", lambda: fake)
+
+
+async def test_market_data_health_proxied(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET /health forwards the upstream engine's readiness payload."""
+    fake = _FakeUpstream(
+        response=httpx.Response(
+            200, json={"status": "ok", "db": True, "redis": True, "cookie_present": False}
+        )
+    )
+    _patch_upstream(monkeypatch, fake)
     response = await async_client.get("/api/v2/engines/market-data/health")
-
     assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "stub"
-    assert body["engine"] == "market-data"
+    assert response.json()["status"] == "ok"
+    assert fake.calls[0]["path"] == "/health"
 
 
-async def test_market_data_providers_returns_stub(async_client: AsyncClient) -> None:
-    """GET /api/v2/engines/market-data/providers returns stubbed providers."""
+async def test_market_data_ohlcv_forwards_params_and_api_key(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Query params and X-API-Key are forwarded to the engine."""
+    fake = _FakeUpstream(
+        response=httpx.Response(200, json={"symbol": "SET:PTT", "timeframe": "1d", "bars": []})
+    )
+    _patch_upstream(monkeypatch, fake)
+    response = await async_client.get(
+        "/api/v2/engines/market-data/ohlcv",
+        params={"symbol": "SET:PTT", "timeframe": "1d"},
+        headers={"X-API-Key": "k123"},
+    )
+    assert response.status_code == 200
+    call = fake.calls[0]
+    assert call["path"] == "/ohlcv"
+    assert call["params"] == {"symbol": "SET:PTT", "timeframe": "1d"}
+    assert call["headers"].get("X-API-Key") == "k123"
+
+
+async def test_market_data_adjusted_proxied(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeUpstream(response=httpx.Response(200, json={"adjusted": True, "bars": []}))
+    _patch_upstream(monkeypatch, fake)
+    response = await async_client.get("/api/v2/engines/market-data/ohlcv/adjusted")
+    assert response.status_code == 200 and response.json()["adjusted"] is True
+    assert fake.calls[0]["path"] == "/ohlcv/adjusted"
+
+
+async def test_market_data_4xx_passthrough(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Upstream 4xx (e.g. auth) passes through with its status + body."""
+    fake = _FakeUpstream(response=httpx.Response(401, json={"detail": "invalid API key"}))
+    _patch_upstream(monkeypatch, fake)
+    response = await async_client.get("/api/v2/engines/market-data/ohlcv")
+    assert response.status_code == 401
+    assert response.json()["detail"] == "invalid API key"
+
+
+async def test_market_data_upstream_5xx_maps_to_502(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeUpstream(response=httpx.Response(500, json={"detail": "boom"}))
+    _patch_upstream(monkeypatch, fake)
+    response = await async_client.get("/api/v2/engines/market-data/health")
+    assert response.status_code == 502
+
+
+async def test_market_data_timeout_maps_to_504(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeUpstream(exc=httpx.TimeoutException("slow"))
+    _patch_upstream(monkeypatch, fake)
+    response = await async_client.get("/api/v2/engines/market-data/health")
+    assert response.status_code == 504
+
+
+async def test_market_data_connect_error_maps_to_503(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeUpstream(exc=httpx.ConnectError("refused"))
+    _patch_upstream(monkeypatch, fake)
+    response = await async_client.get("/api/v2/engines/market-data/universe")
+    assert response.status_code == 503
+    assert fake.calls[0]["path"] == "/universe"
+
+
+async def test_market_data_invalid_json_maps_to_502(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeUpstream(response=httpx.Response(200, content=b"not json"))
+    _patch_upstream(monkeypatch, fake)
+    response = await async_client.get("/api/v2/engines/market-data/health")
+    assert response.status_code == 502
+
+
+async def test_market_data_close_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """close_market_data_client closes and clears the shared client."""
+    real = md._get_client()
+    assert md._client is real
+    await md.close_market_data_client()
+    assert md._client is None
+
+
+async def test_market_data_providers_static(async_client: AsyncClient) -> None:
+    """GET /providers stays a static informational endpoint (backward compat)."""
     response = await async_client.get("/api/v2/engines/market-data/providers")
-
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "active"
-    assert "settfex" in body["providers"]
-    assert "tvkit" in body["providers"]
+    assert "settfex" in body["providers"] and "tvkit" in body["providers"]
 
 
 # --------------------------------------------------------------------------- #
