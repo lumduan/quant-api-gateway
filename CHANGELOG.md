@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (feature-execution-engine — Phase 2: execution engine proxy)
+
+- **`/api/v2/engines/execution/*`** — thin reverse proxy to the standalone
+  `quant-execution-engine` (host `:8400`): `GET /health`, `GET /capabilities`,
+  `POST /orders`, `GET`/`DELETE /orders/{client_order_id}`. Mirrors the market-data
+  proxy, extended to forward the method + raw request body. Engine 4xx typed
+  envelopes pass through verbatim; transport failures map to 502/503/504; the
+  engine's `/admin/*` kill-switch surface is deliberately not proxied. **The gateway
+  holds no broker credential (D2).** New settings `execution_engine_service_url` /
+  `execution_engine_timeout_seconds`; `execution` added to the static engine catalog
+  (live `engine_registry` row in quant-infra-db#13); 13-case proxy test suite.
+
 ### Added
 
 - **Phase 1 — Project Bootstrap.** Replaces the `python-template` skeleton with the `quant-api-gateway` FastAPI service:
