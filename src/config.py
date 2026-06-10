@@ -64,6 +64,20 @@ class Settings(BaseSettings):
         gt=0,
         description="Per-request timeout (seconds) for upstream Market Data engine calls.",
     )
+    execution_engine_service_url: str = Field(
+        default="http://quant-execution-engine:8000",
+        description=(
+            "Base URL of the upstream Execution engine that the gateway proxies "
+            "``/api/v2/engines/execution/*`` to. Defaults to the in-network "
+            "service name; override only for local/host access. The gateway "
+            "holds NO broker credential — it forwards orders, nothing more."
+        ),
+    )
+    execution_engine_timeout_seconds: float = Field(
+        default=10.0,
+        gt=0,
+        description="Per-request timeout (seconds) for upstream Execution engine calls.",
+    )
     internal_api_key: str = Field(
         ...,
         min_length=1,

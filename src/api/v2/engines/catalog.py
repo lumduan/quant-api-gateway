@@ -60,6 +60,15 @@ _STATIC_CATALOG: list[EngineEntry] = [
         status="dormant",
         description="Signal generation pipeline (future)",
     ),
+    EngineEntry(
+        slug="execution",
+        type="EXTERNAL",
+        status="active",
+        description=(
+            "Standalone quant-execution-engine (host :8400), gateway-proxied; "
+            "canonical order router (sim-first), no broker credential in the gateway"
+        ),
+    ),
 ]
 
 

@@ -612,17 +612,17 @@ async def test_signals_status_returns_dormant(async_client: AsyncClient) -> None
 # --------------------------------------------------------------------------- #
 
 
-async def test_catalog_returns_all_four_engines(async_client: AsyncClient) -> None:
-    """GET /api/v2/engines/catalog returns all four engine slugs (static fallback)."""
+async def test_catalog_returns_all_five_engines(async_client: AsyncClient) -> None:
+    """GET /api/v2/engines/catalog returns all five engine slugs (static fallback)."""
     response = await async_client.get("/api/v2/engines/catalog")
 
     assert response.status_code == 200
     body = response.json()
     assert isinstance(body, list)
-    assert len(body) == 4
+    assert len(body) == 5
 
     slugs = {entry["slug"] for entry in body}
-    assert slugs == {"market-data", "backtest", "portfolio", "signals"}
+    assert slugs == {"market-data", "backtest", "portfolio", "signals", "execution"}
 
     for entry in body:
         assert "type" in entry
