@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -223,3 +224,304 @@ async def test_catalog_lists_execution(async_client: AsyncClient) -> None:
     assert response.status_code == 200
     slugs = {entry["slug"] for entry in response.json()}
     assert "execution" in slugs
+
+
+# --------------------------------------------------------------------------- #
+# PATCH /orders/{cid} — native amend (buffered proxy)
+# --------------------------------------------------------------------------- #
+
+
+async def test_execution_patch_order_forwards_body_and_api_key(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PATCH /orders/{cid} forwards method+path+body+X-API-Key; 200 passes through."""
+    upstream_body = {"client_order_id": "oid-1", "status": "PENDING_REPLACE"}
+    fake = _FakeUpstream(response=httpx.Response(200, json=upstream_body))
+    _patch_upstream(monkeypatch, fake)
+    response = await async_client.patch(
+        "/api/v2/engines/execution/orders/oid-1",
+        json={"price": "10.50", "quantity": 200},
+        headers={"X-API-Key": "k123"},
+    )
+    assert response.status_code == 200
+    assert response.json() == upstream_body
+    call = fake.calls[0]
+    assert call["method"] == "PATCH"
+    assert call["path"] == "/orders/oid-1"
+    assert call["headers"].get("X-API-Key") == "k123"
+    assert b'"price"' in call["content"]
+
+
+async def test_execution_patch_order_409_envelope_passthrough(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A typed 409 amend-reject envelope passes through verbatim."""
+    fake = _FakeUpstream(
+        response=httpx.Response(409, json={"error": {"code": "illegal_transition", "message": "x"}})
+    )
+    _patch_upstream(monkeypatch, fake)
+    response = await async_client.patch(
+        "/api/v2/engines/execution/orders/oid-1", json={"price": "1"}
+    )
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "illegal_transition"
+
+
+# --------------------------------------------------------------------------- #
+# SSE pass-through — /orders/stream and /order-book/{symbol}/stream
+# --------------------------------------------------------------------------- #
+
+
+class _CapturingStream(httpx.AsyncByteStream):
+    """An async byte stream that records whether it was closed (aiter once)."""
+
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = chunks
+        self.closed = False
+
+    async def __aiter__(self) -> Any:
+        for chunk in self._chunks:
+            yield chunk
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+def _streaming_client(
+    handler: Callable[[httpx.Request], httpx.Response], captured: list[httpx.Request]
+) -> httpx.AsyncClient:
+    """Build a real AsyncClient over a MockTransport so send(stream=True) streams.
+
+    ``handler(request) -> httpx.Response`` decides the upstream response; every
+    request is appended to ``captured`` so tests can assert what the gateway
+    forwarded (path, query params, headers).
+    """
+
+    def _wrapped(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return handler(request)
+
+    return httpx.AsyncClient(base_url="http://up", transport=httpx.MockTransport(_wrapped))
+
+
+async def test_execution_orders_stream_passes_through_unbuffered(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 200 SSE upstream streams through as text/event-stream with X-Accel-Buffering."""
+    chunks = [b"data: a\n\n", b": keep-alive\n\n", b"data: b\n\n"]
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            stream=_CapturingStream(chunks),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    client = _streaming_client(handler, captured)
+    monkeypatch.setattr(ex, "_get_client", lambda: client)
+
+    body = b""
+    async with async_client.stream(
+        "GET",
+        "/api/v2/engines/execution/orders/stream",
+        params={
+            "strategy_id": "s1",
+            "client_order_id": "oid-1",
+            "last_event_id": "7",
+        },
+        headers={"Last-Event-ID": "42", "X-API-Key": "k123"},
+    ) as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        assert response.headers["x-accel-buffering"] == "no"
+        assert response.headers["cache-control"] == "no-cache"
+        async for chunk in response.aiter_raw():
+            body += chunk
+    assert body == b"".join(chunks)
+
+    # The Last-Event-ID header and all query params were forwarded upstream.
+    req = captured[0]
+    assert req.url.path == "/orders/stream"
+    assert req.headers.get("last-event-id") == "42"
+    assert req.headers.get("x-api-key") == "k123"
+    params = dict(req.url.params)
+    assert params["strategy_id"] == "s1"
+    assert params["client_order_id"] == "oid-1"
+    assert params["last_event_id"] == "7"
+
+    await client.aclose()
+
+
+async def test_execution_orders_stream_does_not_shadow_get_order(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET /orders/stream hits the SSE route, NOT the /orders/{cid} path param."""
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            stream=_CapturingStream([b"data: x\n\n"]),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    client = _streaming_client(handler, captured)
+    monkeypatch.setattr(ex, "_get_client", lambda: client)
+
+    async with async_client.stream("GET", "/api/v2/engines/execution/orders/stream") as response:
+        async for _ in response.aiter_raw():
+            pass
+
+    # The upstream saw the literal stream path, not /orders/<captured-cid>.
+    assert captured[0].url.path == "/orders/stream"
+    await client.aclose()
+
+
+async def test_execution_orders_stream_503_envelope_passthrough(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-200 SSE upstream (503 order_stream_unavailable) passes through as JSON."""
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            503, json={"error": {"code": "order_stream_unavailable", "message": "x"}}
+        )
+
+    client = _streaming_client(handler, captured)
+    monkeypatch.setattr(ex, "_get_client", lambda: client)
+
+    response = await async_client.get("/api/v2/engines/execution/orders/stream")
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "order_stream_unavailable"
+    await client.aclose()
+
+
+async def test_execution_orders_stream_unparseable_non200_maps_to_502(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-200 SSE upstream with an unparseable body maps to 502."""
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, content=b"not json")
+
+    client = _streaming_client(handler, captured)
+    monkeypatch.setattr(ex, "_get_client", lambda: client)
+
+    response = await async_client.get("/api/v2/engines/execution/orders/stream")
+    assert response.status_code == 502
+    await client.aclose()
+
+
+async def test_execution_orders_stream_connect_error_maps_to_503(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A connect error on the SSE send maps to 503."""
+    # The SSE helper uses build_request/send; use a stub that raises on send.
+    monkeypatch.setattr(ex, "_get_client", lambda: _StreamErrorClient(httpx.ConnectError("x")))
+    response = await async_client.get("/api/v2/engines/execution/orders/stream")
+    assert response.status_code == 503
+
+
+async def test_execution_orders_stream_timeout_maps_to_504(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A timeout on the SSE send maps to 504."""
+    monkeypatch.setattr(ex, "_get_client", lambda: _StreamErrorClient(httpx.ConnectTimeout("slow")))
+    response = await async_client.get("/api/v2/engines/execution/orders/stream")
+    assert response.status_code == 504
+
+
+class _StreamErrorClient:
+    """A client whose build_request works but send() always raises (SSE error path)."""
+
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    def build_request(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: Any = None,
+        headers: Any = None,
+        timeout: Any = None,
+    ) -> httpx.Request:
+        return httpx.Request(method, f"http://up{url}", params=params, headers=headers)
+
+    async def send(self, *args: Any, **kwargs: Any) -> httpx.Response:
+        raise self._exc
+
+
+# --------------------------------------------------------------------------- #
+# Order-book snapshot (plain JSON proxy) and stream
+# --------------------------------------------------------------------------- #
+
+
+async def test_execution_order_book_snapshot_json_proxy(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET /order-book/{symbol} is a plain JSON proxy; 200 passes through."""
+    fake = _FakeUpstream(
+        response=httpx.Response(200, json={"symbol": "PTT", "bids": [], "asks": []})
+    )
+    _patch_upstream(monkeypatch, fake)
+    response = await async_client.get(
+        "/api/v2/engines/execution/order-book/PTT", params={"market": "SET"}
+    )
+    assert response.status_code == 200
+    assert response.json()["symbol"] == "PTT"
+    assert fake.calls[0]["method"] == "GET"
+    assert fake.calls[0]["path"] == "/order-book/PTT"
+    assert fake.calls[0]["params"] == {"market": "SET"}
+
+
+async def test_execution_order_book_snapshot_404_envelope(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 404 order_book_unavailable envelope passes through verbatim."""
+    fake = _FakeUpstream(
+        response=httpx.Response(
+            404, json={"error": {"code": "order_book_unavailable", "message": "x"}}
+        )
+    )
+    _patch_upstream(monkeypatch, fake)
+    response = await async_client.get("/api/v2/engines/execution/order-book/PTT")
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "order_book_unavailable"
+
+
+async def test_execution_order_book_stream_passes_through(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET /order-book/{symbol}/stream streams SSE through unbuffered."""
+    chunks = [b"data: bid\n\n", b"data: ask\n\n"]
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            stream=_CapturingStream(chunks),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    client = _streaming_client(handler, captured)
+    monkeypatch.setattr(ex, "_get_client", lambda: client)
+
+    body = b""
+    async with async_client.stream(
+        "GET",
+        "/api/v2/engines/execution/order-book/PTT/stream",
+        params={"market": "SET"},
+    ) as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        assert response.headers["x-accel-buffering"] == "no"
+        async for chunk in response.aiter_raw():
+            body += chunk
+    assert body == b"".join(chunks)
+    assert captured[0].url.path == "/order-book/PTT/stream"
+    assert dict(captured[0].url.params) == {"market": "SET"}
+    await client.aclose()

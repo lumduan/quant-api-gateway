@@ -389,6 +389,36 @@ All endpoints are mounted under `/api/v1`. OpenAPI docs at `/docs` and `/redoc`.
 | 422 | Malformed JSON, validation failure, or partial date-range params |
 | 500 | Database/Redis failure (typed error detail) |
 
+### v2 engines — execution proxy (`src/api/v2/engines/execution.py`)
+
+Thin reverse proxy to the standalone `quant-execution-engine` (in-network
+`http://quant-execution-engine:8000`). The gateway holds **no broker
+credential** — it forwards the caller's `X-API-Key`, passes the engine's typed
+4xx rejection envelopes through verbatim, and maps transport failures to
+`502/503/504`. The engine's `/admin/*` (kill-switch) surface is **never**
+proxied. Mounted under `/api/v2/engines/execution`.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/v2/engines/execution/health` | — | Engine liveness (stage + public_mode) |
+| GET | `/api/v2/engines/execution/capabilities` | — | Per-(broker, market) capability matrix |
+| POST | `/api/v2/engines/execution/orders` | `X-API-Key` | Submit a NormalizedOrder (idempotent on `client_order_id`) |
+| GET | `/api/v2/engines/execution/orders/stream` | `X-API-Key` | **SSE** order-update event stream (see buffering note) |
+| GET | `/api/v2/engines/execution/orders/{client_order_id}` | — | Read one order's normalized state |
+| PATCH | `/api/v2/engines/execution/orders/{client_order_id}` | `X-API-Key` | Amend a resting order's price/quantity (native or cancel+replace) |
+| DELETE | `/api/v2/engines/execution/orders/{client_order_id}` | `X-API-Key` | Cancel a resting order |
+| GET | `/api/v2/engines/execution/order-book/{symbol}` | — | Order-book snapshot (JSON) |
+| GET | `/api/v2/engines/execution/order-book/{symbol}/stream` | — | **SSE** order-book update stream (`?market=` required; see buffering note) |
+
+**Buffering note:** the two SSE routes (`/orders/stream`,
+`/order-book/{symbol}/stream`) stream the upstream body **unbuffered** as
+`text/event-stream` (chunked transfer; `Cache-Control: no-cache`,
+`X-Accel-Buffering: no`). The per-stream httpx read timeout is disabled so an
+idle keep-alive-only stream is not killed. The `Last-Event-ID` request header
+and all query params are forwarded; a non-200 upstream (e.g. 503
+`order_stream_unavailable`, 404 `order_book_unavailable`) is buffered and
+returned verbatim as JSON. Every other route stays buffered JSON.
+
 ---
 
 ## 8. Application Lifecycle (`src/main.py`)
