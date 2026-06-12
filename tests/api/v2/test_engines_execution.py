@@ -113,6 +113,34 @@ async def test_execution_post_orders_forwards_body_and_api_key(
     assert b'"client_order_id"' in call["content"]
 
 
+async def test_execution_post_orders_forwards_strategy_id(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """POST /orders forwards X-Strategy-Id so the engine can persist strategy_id."""
+    fake = _FakeUpstream(response=httpx.Response(201, json={"status": "FILLED"}))
+    _patch_upstream(monkeypatch, fake)
+    response = await async_client.post(
+        "/api/v2/engines/execution/orders",
+        json={"client_order_id": "abc"},
+        headers={"X-Strategy-Id": "csm-set"},
+    )
+    assert response.status_code == 201
+    assert fake.calls[0]["headers"].get("X-Strategy-Id") == "csm-set"
+
+
+async def test_execution_post_orders_without_strategy_id_omits_header(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A POST without X-Strategy-Id must not synthesise the header upstream."""
+    fake = _FakeUpstream(response=httpx.Response(201, json={"status": "FILLED"}))
+    _patch_upstream(monkeypatch, fake)
+    response = await async_client.post(
+        "/api/v2/engines/execution/orders", json={"client_order_id": "abc"}
+    )
+    assert response.status_code == 201
+    assert "X-Strategy-Id" not in fake.calls[0]["headers"]
+
+
 async def test_execution_resend_200_passthrough(
     async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -350,6 +378,34 @@ async def test_execution_orders_stream_passes_through_unbuffered(
     assert params["client_order_id"] == "oid-1"
     assert params["last_event_id"] == "7"
 
+    await client.aclose()
+
+
+async def test_execution_orders_stream_forwards_strategy_id(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The SSE stream forwards X-Strategy-Id upstream for restart-safe filtering."""
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            stream=_CapturingStream([b"data: x\n\n"]),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    client = _streaming_client(handler, captured)
+    monkeypatch.setattr(ex, "_get_client", lambda: client)
+
+    async with async_client.stream(
+        "GET",
+        "/api/v2/engines/execution/orders/stream",
+        headers={"X-Strategy-Id": "s1"},
+    ) as response:
+        async for _ in response.aiter_raw():
+            pass
+
+    assert captured[0].headers.get("x-strategy-id") == "s1"
     await client.aclose()
 
 

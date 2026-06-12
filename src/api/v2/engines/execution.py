@@ -4,7 +4,8 @@ The standalone ``quant-execution-engine`` (host ``:8400``, in-network
 ``http://quant-execution-engine:8000``) is the canonical order router and the
 sole owner of broker order-routing credentials. The gateway is a **thin
 reverse proxy**: it holds no credential, forwards the order surface plus the
-caller's ``X-API-Key``, and maps transport failures to clean ``502/503/504``.
+caller's ``X-API-Key`` and ``X-Strategy-Id``, and maps transport failures to
+clean ``502/503/504``.
 Engine 4xx responses — including the typed rejection envelopes (``public_mode``,
 ``risk_rejected``, ``capability_unsupported``, ``kill_switch_engaged``,
 ``order_book_unavailable``, ``order_stream_unavailable`` …) — pass through
@@ -72,6 +73,9 @@ async def _proxy(request: Request, method: str, path: str) -> JSONResponse:
     api_key = request.headers.get("X-API-Key")
     if api_key:
         headers["X-API-Key"] = api_key
+    strategy_id = request.headers.get("X-Strategy-Id")
+    if strategy_id:
+        headers["X-Strategy-Id"] = strategy_id
     body = await request.body()
     if body:
         headers["Content-Type"] = request.headers.get("Content-Type", "application/json")
@@ -134,6 +138,9 @@ async def _proxy_sse(request: Request, path: str) -> StreamingResponse | JSONRes
     api_key = request.headers.get("X-API-Key")
     if api_key:
         headers["X-API-Key"] = api_key
+    strategy_id = request.headers.get("X-Strategy-Id")
+    if strategy_id:
+        headers["X-Strategy-Id"] = strategy_id
     last_event_id = request.headers.get("Last-Event-ID")
     if last_event_id:
         headers["Last-Event-ID"] = last_event_id
