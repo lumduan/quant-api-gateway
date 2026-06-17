@@ -122,6 +122,12 @@ async def market_data_settlements(symbol: str, request: Request) -> JSONResponse
     return await _proxy(f"/settlements/{symbol}", request)
 
 
+@router.get("/underlying-price/{symbol}", summary="TFEX series underlying spot (proxied)")
+async def market_data_underlying_price(symbol: str, request: Request) -> JSONResponse:
+    """Proxy a TFEX series' underlying-instrument spot (SET50 index, public via settfex)."""
+    return await _proxy(f"/underlying-price/{symbol}", request)
+
+
 @router.get(
     "/providers",
     response_model=MarketDataProvidersResponse,
