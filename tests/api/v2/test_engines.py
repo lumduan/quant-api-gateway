@@ -526,6 +526,27 @@ async def test_market_data_settlements_proxied(
     assert call["headers"].get("X-API-Key") == "k123"
 
 
+async def test_market_data_underlying_price_proxied(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET /underlying-price/{symbol} forwards the symbol path + X-API-Key to the engine."""
+    fake = _FakeUpstream(
+        response=httpx.Response(
+            200, json={"symbol": "S50M26", "underlying_symbol": "SET50", "last": "1028.46"}
+        )
+    )
+    _patch_upstream(monkeypatch, fake)
+    response = await async_client.get(
+        "/api/v2/engines/market-data/underlying-price/S50M26",
+        headers={"X-API-Key": "k123"},
+    )
+    assert response.status_code == 200
+    assert response.json()["underlying_symbol"] == "SET50"
+    call = fake.calls[0]
+    assert call["path"] == "/underlying-price/S50M26"
+    assert call["headers"].get("X-API-Key") == "k123"
+
+
 async def test_market_data_adjusted_proxied(
     async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
