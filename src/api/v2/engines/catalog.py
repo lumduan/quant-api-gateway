@@ -69,6 +69,15 @@ _STATIC_CATALOG: list[EngineEntry] = [
             "canonical order router (sim-first), no broker credential in the gateway"
         ),
     ),
+    EngineEntry(
+        slug="orderbook",
+        type="EXTERNAL",
+        status="active",
+        description=(
+            "Standalone quant-orderbook-engine (host :8600), gateway-proxied; "
+            "durable L2/T&S capture + derived greeks/features (read-only, market-data plane)"
+        ),
+    ),
 ]
 
 

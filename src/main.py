@@ -16,6 +16,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from src.api.v1.router import api_router
 from src.api.v2.engines.execution import close_execution_client
 from src.api.v2.engines.market_data import close_market_data_client
+from src.api.v2.engines.orderbook import close_orderbook_client
 from src.api.v2.router import api_router as v2_api_router
 from src.config import get_settings
 from src.db.csm_set_postgres import close_csm_set_pool, get_csm_set_pool
@@ -57,6 +58,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await close_redis()
         await close_market_data_client()
         await close_execution_client()
+        await close_orderbook_client()
         strategy_registry.clear_registry()
 
 
