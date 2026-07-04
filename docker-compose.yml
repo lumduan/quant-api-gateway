@@ -3,6 +3,10 @@ services:
     build: .
     container_name: quant-api-gateway
     restart: always
+    # PID-1 reaper (tini): uvicorn runs as PID 1 and does not wait() on
+    # children, so SIGKILLed healthcheck `curl` processes pile up as <defunct>
+    # zombies. `init: true` makes Docker inject tini as PID 1 to reap them.
+    init: true
     ports:
       # Host-side port is overridable via API_GATEWAY_HOST_PORT in .env
       # (defaults to 8000). Override when another service on the host
