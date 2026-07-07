@@ -9,6 +9,7 @@ from fastapi import APIRouter
 from src.api.v2.engines import (
     backtest,
     catalog,
+    crypto,
     execution,
     market_data,
     orderbook,
@@ -23,5 +24,6 @@ api_router.include_router(backtest.router, prefix="/engines/backtest")
 api_router.include_router(market_data.router, prefix="/engines/market-data")
 api_router.include_router(execution.router, prefix="/engines/execution")
 api_router.include_router(orderbook.router, prefix="/engines/orderbook")
+api_router.include_router(crypto.router, prefix="/engines/crypto")
 api_router.include_router(signals.router, prefix="/engines/signals")
 api_router.include_router(catalog.router, prefix="/engines")

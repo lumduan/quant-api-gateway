@@ -14,6 +14,7 @@ from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 from src.api.v1.router import api_router
+from src.api.v2.engines.crypto import close_crypto_client
 from src.api.v2.engines.execution import close_execution_client
 from src.api.v2.engines.market_data import close_market_data_client
 from src.api.v2.engines.orderbook import close_orderbook_client
@@ -59,6 +60,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await close_market_data_client()
         await close_execution_client()
         await close_orderbook_client()
+        await close_crypto_client()
         strategy_registry.clear_registry()
 
 
