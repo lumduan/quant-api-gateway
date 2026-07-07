@@ -78,6 +78,15 @@ _STATIC_CATALOG: list[EngineEntry] = [
             "durable L2/T&S capture + derived greeks/features (read-only, market-data plane)"
         ),
     ),
+    EngineEntry(
+        slug="crypto",
+        type="EXTERNAL",
+        status="active",
+        description=(
+            "Standalone quant-crypto-engine (host :9100), gateway-proxied; durable 24/7 "
+            "crypto L2/T&S capture — Binance TH/Global + Bitkub (read-only, market-data plane)"
+        ),
+    ),
 ]
 
 
