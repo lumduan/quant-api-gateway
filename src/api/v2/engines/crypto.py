@@ -16,6 +16,7 @@ Proxied surface (all GET — the crypto engine's Phase-1 read API):
 * ``/health`` — engine liveness (+ today's binance_th DQ grade).
 * ``/status`` — per-venue capture state + DB-writer stats.
 * ``/symbols`` — configured per-venue instrument universe.
+* ``/premium`` — cross-exchange THB premium (a derived VIEW; bps + basis per pair).
 * ``/trades/{symbol}`` — recent trade prints (``?venue=`` filter). ``symbol`` is
   a ``:path`` param — crypto symbols contain a slash (e.g. ``BTC/USDT``).
 * ``/manifest/{day}`` — per-``(day, venue)`` DQ manifest (``?source=`` venue).
@@ -119,6 +120,12 @@ async def crypto_status(request: Request) -> JSONResponse:
 async def crypto_symbols(request: Request) -> JSONResponse:
     """Proxy the configured per-venue instrument universe."""
     return await _proxy(request, "/symbols")
+
+
+@router.get("/premium", summary="Cross-exchange THB premium (proxied)")
+async def crypto_premium(request: Request) -> JSONResponse:
+    """Proxy the engine's cross-exchange THB-premium read (a derived VIEW; ephemeral)."""
+    return await _proxy(request, "/premium")
 
 
 @router.get("/trades/{symbol:path}", summary="Recent trade prints (proxied)")
