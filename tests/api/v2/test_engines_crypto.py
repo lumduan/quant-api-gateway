@@ -79,6 +79,23 @@ async def test_crypto_health_proxied(
     assert fake.calls[0]["path"] == "/health"
 
 
+async def test_crypto_premium_proxied(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET /premium forwards the engine's THB-premium snapshot verbatim."""
+    fake = _FakeUpstream(
+        response=httpx.Response(
+            200,
+            json={"stale": False, "metrics": [{"name": "btc_thb_premium", "premium_bps": "9.76"}]},
+        )
+    )
+    _patch_upstream(monkeypatch, fake)
+    response = await async_client.get("/api/v2/engines/crypto/premium")
+    assert response.status_code == 200
+    assert response.json()["metrics"][0]["name"] == "btc_thb_premium"
+    assert fake.calls[0]["path"] == "/premium"
+
+
 async def test_crypto_status_and_symbols_paths(
     async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
