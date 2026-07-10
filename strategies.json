@@ -15,6 +15,14 @@
       "service_url": "http://quant-tfex-s50-multi-tf-swing:8000",
       "capital_weight": 1.0,
       "active": false
+    },
+    {
+      "id": "cash-and-carry-set-tfex",
+      "name": "Cash-and-Carry SET/TFEX Basis Arbitrage",
+      "type": "ARBITRAGE_BASIS",
+      "service_url": "http://quant-cash-and-carry-set-tfex:8000",
+      "capital_weight": 0.0,
+      "active": false
     }
   ]
 }
