@@ -19,8 +19,19 @@ while listing two 503s among its own examples — and ``_proxy`` did collapse ev
 The wording is corrected rather than deleted because the wrong version is why
 nobody noticed: it described the behaviour everyone wanted.
 
-The engine's ``/admin/*`` (kill-switch) surface is deliberately NOT proxied:
-owner-mode operations are engine-direct only.
+The engine's ``/admin/*`` (kill-switch) surface is deliberately NOT proxied.
+
+⚠️ **The rule for /admin/* is narrower than it used to be stated, and the
+wording is corrected here rather than left to mislead.** It previously read
+*"owner-mode operations are engine-direct only"*, which the account reads added
+below **falsify** — ``GET /accounts/*`` is owner-mode on the engine and is now
+proxied. The line that actually holds is: **the engine's global-safety MUTATIONS
+stay engine-direct.** ``/admin/kill-switch*`` changes platform-wide state and
+must not be reachable through a public aggregator; a read of venue truth does
+not. Enforcement is unchanged either way — the gateway injects **no** credential
+of its own and forwards only the caller's ``X-API-Key``, so it grants no
+authority the caller did not already hold, and the engine's ``require_api_key``
++ ``require_owner_mode`` still decide.
 
 Proxied surface:
 
@@ -33,6 +44,8 @@ Proxied surface:
 * ``DELETE /orders/{client_order_id}`` — cancel a resting order.
 * ``GET /order-book/{symbol}`` — JSON order-book snapshot.
 * ``GET /order-book/{symbol}/stream`` — **SSE** order-book updates.
+* ``GET /accounts/{account}`` — normalized balance / buying power (``?broker=``).
+* ``GET /accounts/{account}/open-orders`` — venue-truth resting orders (``?broker=``).
 
 SSE pass-through is unbuffered (chunked transfer; the httpx read timeout is
 disabled per-stream so an idle keep-alive-only stream is not killed); JSON
@@ -348,3 +361,40 @@ async def execution_order_book_stream(
 ) -> StreamingResponse | JSONResponse:
     """Stream order-book SSE updates through unbuffered (``?market=`` required)."""
     return await _proxy_sse(request, f"/order-book/{symbol}/stream")
+
+
+# NOTE: unlike ``/orders/stream`` above, the declaration order of the two
+# ``/accounts`` routes is NOT load-bearing — they differ in SEGMENT COUNT, and a
+# path parameter never matches across a ``/``. Said explicitly because the
+# neighbouring NOTE documents a case where order IS required, and copying that
+# reasoning here would assert a constraint that does not exist.
+@router.get(
+    "/accounts/{account}/open-orders",
+    summary="Venue-truth resting orders for one account (proxied; ``?broker=`` required)",
+)
+async def execution_account_open_orders(account: str, request: Request) -> JSONResponse:
+    """Proxy the venue-truth open-orders read.
+
+    This is the VENUE's view, not the engine's durable store — the two can
+    legitimately disagree while a submit is in flight, which is the whole reason
+    the endpoint exists. The engine gates it owner-mode; the gateway does not
+    relax that (see the module docstring).
+    """
+    return await _proxy(request, "GET", f"/accounts/{account}/open-orders")
+
+
+@router.get(
+    "/accounts/{account}",
+    summary="Normalized account balance / buying power (proxied; ``?broker=`` required)",
+)
+async def execution_account(account: str, request: Request) -> JSONResponse:
+    """Proxy the normalized balance read.
+
+    🔴 The engine RAISES for an account it cannot read rather than returning a
+    zero, and that distinction must survive the hop: a coerced ``0`` here would
+    report a confident balance for an unreadable account. Nothing in this proxy
+    interprets the body — ``_proxy`` forwards status and payload verbatim — so a
+    ``null`` field (the broker did not report it) stays distinct from ``0`` (the
+    broker reported zero).
+    """
+    return await _proxy(request, "GET", f"/accounts/{account}")

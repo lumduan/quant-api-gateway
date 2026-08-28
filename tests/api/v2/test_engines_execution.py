@@ -717,3 +717,137 @@ async def test_the_SSE_path_makes_the_SAME_decision_as_the_json_path(
     assert response.status_code == 502
     assert response.json()["detail"] == "execution engine error"
     await client.aclose()
+
+
+# ------------------------------------------- account reads (balance / open-orders)
+
+
+async def test_execution_account_balance_proxied_with_broker_query(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET /accounts/{account} forwards the path, ?broker=, and X-API-Key."""
+    body = {
+        "account": "0500009",
+        "account_type": "derivative",
+        "buying_power": "10000.44",
+        "equity": "10000.44",
+    }
+    fake = _FakeUpstream(response=httpx.Response(200, json=body))
+    _patch_upstream(monkeypatch, fake)
+    response = await async_client.get(
+        "/api/v2/engines/execution/accounts/0500009",
+        params={"broker": "streaming_pro"},
+        headers={"X-API-Key": "k123"},
+    )
+    assert response.status_code == 200
+    assert response.json() == body
+    call = fake.calls[0]
+    assert call["method"] == "GET"
+    assert call["path"] == "/accounts/0500009"
+    assert call["params"] == {"broker": "streaming_pro"}
+    assert call["headers"]["X-API-Key"] == "k123"
+
+
+async def test_execution_account_open_orders_proxied(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The open-orders sub-path is NOT swallowed by the balance route."""
+    fake = _FakeUpstream(response=httpx.Response(200, json={"orders": []}))
+    _patch_upstream(monkeypatch, fake)
+    response = await async_client.get(
+        "/api/v2/engines/execution/accounts/70000007/open-orders",
+        params={"broker": "liberator"},
+    )
+    assert response.status_code == 200
+    # The whole point: the extra segment must reach the engine, not be dropped.
+    assert fake.calls[0]["path"] == "/accounts/70000007/open-orders"
+
+
+async def test_the_gateway_GRANTS_NO_AUTHORITY_a_401_passes_through_verbatim(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """🔴 The security property of this proxy, asserted rather than assumed.
+
+    The account reads are OWNER-MODE on the engine. The gateway must be a pure
+    hop: it holds no credential, injects none, and must not convert the engine's
+    rejection into anything else. If a future edit made the gateway supply its
+    own key, this test goes red — which is the only thing standing between "thin
+    proxy" and "privilege escalation via aggregator".
+    """
+    fake = _FakeUpstream(
+        response=httpx.Response(401, json={"detail": "invalid or missing X-API-Key"})
+    )
+    _patch_upstream(monkeypatch, fake)
+    response = await async_client.get(
+        "/api/v2/engines/execution/accounts/0500009", params={"broker": "streaming_pro"}
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "invalid or missing X-API-Key"
+    # No key was sent, so none may be forwarded — and none may be invented.
+    assert "X-API-Key" not in fake.calls[0]["headers"]
+
+
+async def test_an_UNREADABLE_account_error_is_not_softened_into_a_zero(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The engine raises rather than reporting 0 for an account it cannot read.
+
+    That refusal has to survive the hop. A proxy that caught the error and
+    substituted a default would report a confident zero balance for an account
+    nobody could read — the exact defect the engine-side fix removed.
+
+    The engine maps ``streaming_pro_account_unavailable`` to **404** (verified in
+    ``api/error_handlers.py``, not assumed).
+
+    ⚠️ This docstring used to add *"see the 5xx test below for the envelopes that
+    do NOT"* pass through — true when written, and **false since TK-0451 was fixed
+    on 2026-08-27**: typed 5xx envelopes now pass through too. The companion test
+    that pinned that defect was deleted in the same rebase rather than left to
+    fail, since the behaviour it asserted no longer exists.
+    """
+    fake = _FakeUpstream(
+        response=httpx.Response(
+            404,
+            json={
+                "error": "streaming_pro_account_unavailable",
+                "detail": "neither front answered",
+            },
+        )
+    )
+    _patch_upstream(monkeypatch, fake)
+    response = await async_client.get(
+        "/api/v2/engines/execution/accounts/9999999", params={"broker": "streaming_pro"}
+    )
+    assert response.status_code == 404
+    assert response.json()["error"] == "streaming_pro_account_unavailable"
+
+
+async def test_a_null_field_stays_null_and_is_never_coerced_to_zero(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """null (broker did not report) and 0 (broker reported zero) are different facts.
+
+    Liberator's CASH entry omits the margin block while its DERIVATIVE entry
+    reports it as 0. Both readings cross this proxy in the same response shape,
+    so a coercion in either direction would corrupt a margin calculation.
+    """
+    fake = _FakeUpstream(
+        response=httpx.Response(
+            200,
+            json={
+                "account": "70000002",
+                "buying_power": "50000.11",
+                "equity": None,
+                "initial_margin": None,
+                "maintenance_margin": 0,
+            },
+        )
+    )
+    _patch_upstream(monkeypatch, fake)
+    response = await async_client.get(
+        "/api/v2/engines/execution/accounts/70000002", params={"broker": "liberator"}
+    )
+    payload = response.json()
+    assert payload["equity"] is None
+    assert payload["initial_margin"] is None
+    assert payload["maintenance_margin"] == 0
