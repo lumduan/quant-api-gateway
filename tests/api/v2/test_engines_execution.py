@@ -727,15 +727,15 @@ async def test_execution_account_balance_proxied_with_broker_query(
 ) -> None:
     """GET /accounts/{account} forwards the path, ?broker=, and X-API-Key."""
     body = {
-        "account": "0532099",
+        "account": "0500009",
         "account_type": "derivative",
-        "buying_power": "10567.77",
-        "equity": "10567.77",
+        "buying_power": "10000.44",
+        "equity": "10000.44",
     }
     fake = _FakeUpstream(response=httpx.Response(200, json=body))
     _patch_upstream(monkeypatch, fake)
     response = await async_client.get(
-        "/api/v2/engines/execution/accounts/0532099",
+        "/api/v2/engines/execution/accounts/0500009",
         params={"broker": "streaming_pro"},
         headers={"X-API-Key": "k123"},
     )
@@ -743,7 +743,7 @@ async def test_execution_account_balance_proxied_with_broker_query(
     assert response.json() == body
     call = fake.calls[0]
     assert call["method"] == "GET"
-    assert call["path"] == "/accounts/0532099"
+    assert call["path"] == "/accounts/0500009"
     assert call["params"] == {"broker": "streaming_pro"}
     assert call["headers"]["X-API-Key"] == "k123"
 
@@ -755,12 +755,12 @@ async def test_execution_account_open_orders_proxied(
     fake = _FakeUpstream(response=httpx.Response(200, json={"orders": []}))
     _patch_upstream(monkeypatch, fake)
     response = await async_client.get(
-        "/api/v2/engines/execution/accounts/70173297/open-orders",
+        "/api/v2/engines/execution/accounts/70000007/open-orders",
         params={"broker": "liberator"},
     )
     assert response.status_code == 200
     # The whole point: the extra segment must reach the engine, not be dropped.
-    assert fake.calls[0]["path"] == "/accounts/70173297/open-orders"
+    assert fake.calls[0]["path"] == "/accounts/70000007/open-orders"
 
 
 async def test_the_gateway_GRANTS_NO_AUTHORITY_a_401_passes_through_verbatim(
@@ -779,7 +779,7 @@ async def test_the_gateway_GRANTS_NO_AUTHORITY_a_401_passes_through_verbatim(
     )
     _patch_upstream(monkeypatch, fake)
     response = await async_client.get(
-        "/api/v2/engines/execution/accounts/0532099", params={"broker": "streaming_pro"}
+        "/api/v2/engines/execution/accounts/0500009", params={"broker": "streaming_pro"}
     )
     assert response.status_code == 401
     assert response.json()["detail"] == "invalid or missing X-API-Key"
@@ -835,8 +835,8 @@ async def test_a_null_field_stays_null_and_is_never_coerced_to_zero(
         response=httpx.Response(
             200,
             json={
-                "account": "70173292",
-                "buying_power": "50885.83",
+                "account": "70000002",
+                "buying_power": "50000.11",
                 "equity": None,
                 "initial_margin": None,
                 "maintenance_margin": 0,
@@ -845,7 +845,7 @@ async def test_a_null_field_stays_null_and_is_never_coerced_to_zero(
     )
     _patch_upstream(monkeypatch, fake)
     response = await async_client.get(
-        "/api/v2/engines/execution/accounts/70173292", params={"broker": "liberator"}
+        "/api/v2/engines/execution/accounts/70000002", params={"broker": "liberator"}
     )
     payload = response.json()
     assert payload["equity"] is None
