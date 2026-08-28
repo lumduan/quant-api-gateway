@@ -12,7 +12,21 @@ services:
       # (defaults to 8000). Override when another service on the host
       # already binds 8000 — e.g. set API_GATEWAY_HOST_PORT=8080 when
       # the upstream quant-csm-set Strategy Service is co-located.
-      - "${API_GATEWAY_HOST_PORT:-8000}:8000"
+      #
+      # 🔴 BOUND TO 127.0.0.1 (TK-0408). Published on 0.0.0.0 this reached the
+      # execution engine over `quant-network` — a path the engine's own
+      # localhost-only :8400 bind cannot govern, because container-to-container
+      # traffic never touches a host port. HOME's engine has NO API key
+      # configured, so its guard warn-and-allows, and owner mode is on: anything
+      # on the LAN could submit orders through this hop.
+      #
+      # Nothing needs the LAN binding. Every consumer reaches the gateway by
+      # container name (`http://quant-api-gateway:8000`), verified across
+      # cash-and-carry, quant-monitor and csm-set; and the access log over a full
+      # trading day shows requests only from container IPs and loopback, never
+      # from 192.168.1.0/24 — with a control proving a LAN request WOULD be
+      # distinguishable rather than SNAT'd.
+      - "127.0.0.1:${API_GATEWAY_HOST_PORT:-8000}:8000"
     env_file: .env
     depends_on:
       redis:
@@ -29,7 +43,26 @@ services:
     container_name: quant-redis
     restart: always
     ports:
-      - "6379:6379"
+      # 🔴 BOUND TO 127.0.0.1. Published on 0.0.0.0 with NO password, this was
+      # unauthenticated read/write from the LAN — verified 2026-08-28 with a
+      # negative control (:6380 refused, so the success was real):
+      #
+      #     PING   -> PONG          DBSIZE -> 3
+      #     SET    -> OK            DEL    -> 1
+      #     CONFIG GET dir -> /data
+      #
+      # The read side was minor (3 low-sensitivity `liberator:*` config keys, no
+      # credential-shaped fields). The WRITE side was not: arbitrary key writes
+      # into a store another service reads, plus reachable `CONFIG`, which is the
+      # standard Redis arbitrary-file-write vector.
+      #
+      # ⚠️ The genuinely sensitive stores were NOT exposed and are unchanged —
+      # `liberator-redis` and `streaming-pro-redis` (which holds the broker
+      # `sp:*:session` and `:cookies`) publish no host port at all.
+      #
+      # Nothing needs this published: the gateway connects as
+      # `redis://quant-redis:6379/0`, by container name.
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
