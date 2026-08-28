@@ -6,11 +6,21 @@ sole owner of broker order-routing credentials. The gateway is a **thin
 reverse proxy**: it holds no credential, forwards the order surface plus the
 caller's ``X-API-Key`` and ``X-Strategy-Id``, and maps transport failures to
 clean ``502/503/504``.
-Engine 4xx responses — including the typed rejection envelopes (``public_mode``,
-``risk_rejected``, ``capability_unsupported``, ``kill_switch_engaged``,
-``order_book_unavailable``, ``order_stream_unavailable`` …) — pass through
-verbatim. The engine's ``/admin/*`` (kill-switch) surface is deliberately NOT
-proxied: owner-mode operations are engine-direct only.
+Engine **typed-envelope** responses pass through verbatim at the engine's own
+status — 4xx *and* 5xx alike (``public_mode`` 403, ``risk_rejected`` 422,
+``order_book_unavailable`` 404, ``kill_switch_engaged`` 503,
+``broker_circuit_open`` 503, ``order_stream_unavailable`` 503,
+``liberator_positions_uncaptured`` 501 …). Only a **bare, envelope-less** 5xx
+becomes ``502``.
+
+⚠️ This sentence used to say *"Engine 4xx responses … pass through verbatim"*
+while listing two 503s among its own examples — and ``_proxy`` did collapse every
+5xx, so both named envelopes were in fact destroyed (TK-0451, fixed 2026-08-27).
+The wording is corrected rather than deleted because the wrong version is why
+nobody noticed: it described the behaviour everyone wanted.
+
+The engine's ``/admin/*`` (kill-switch) surface is deliberately NOT proxied:
+owner-mode operations are engine-direct only.
 
 Proxied surface:
 
@@ -66,6 +76,71 @@ async def close_execution_client() -> None:
         _client = None
 
 
+def _is_typed_envelope(payload: Any) -> bool:
+    """True when the body is the engine's uniform typed-rejection envelope.
+
+    The engine answers every *deliberate* refusal with
+    ``{"error": {"code", "message", "detail"?}}`` (its ``api/error_handlers.py``
+    docstring is the contract). An *undeliberate* failure — an unhandled
+    exception — comes back as FastAPI's bare ``{"detail": "..."}`` instead. That
+    difference is the only reliable signal separating "the engine is telling you
+    something" from "the engine fell over", and it is what decides passthrough
+    below.
+
+    Checked structurally rather than against a list of known codes on purpose: a
+    new engine envelope must not need a matching edit here to survive the hop.
+    Whitelisting codes would silently re-introduce TK-0451 for every code added
+    after this file was last touched.
+    """
+    if not isinstance(payload, dict):
+        return False
+    error = payload.get("error")
+    return isinstance(error, dict) and isinstance(error.get("code"), str)
+
+
+def _passthrough_or_bad_gateway(
+    status_code: int, payload: Any, method: str, path: str
+) -> JSONResponse:
+    """Decide, for BOTH proxy paths, whether an upstream response survives verbatim.
+
+    🔴 TK-0451. This helper exists because the two proxy functions previously
+    disagreed: ``_proxy_sse`` passed the engine's typed 5xx envelopes through
+    (its comment names ``order_stream_unavailable`` explicitly) while ``_proxy``
+    collapsed **every** ``>= 500`` into a flat ``502 execution engine error``,
+    discarding the body. One path was right, the other was wrong, and nothing
+    forced them to agree — so the fix is a single decision both call, not two
+    parallel edits that can drift apart again.
+
+    The rule:
+
+    * **Typed envelope** — forwarded verbatim at the engine's own status. A
+      caller can then distinguish ``kill_switch_engaged`` (503, deliberate halt —
+      do NOT retry) from ``broker_circuit_open`` (503, venue trouble) from
+      ``liberator_positions_uncaptured`` (501, will never work — stop asking).
+    * **Bare 5xx with no envelope** — ``502``. The engine genuinely failed, and
+      502 attributes that to the upstream; forwarding a bare ``500`` would make
+      the *gateway* look like the thing that broke.
+    * **Anything else** (2xx, and 4xx like ``403 public_mode`` / ``404
+      order_not_found``) — verbatim, unchanged from before.
+    """
+    if status_code >= 500 and not _is_typed_envelope(payload):
+        logger.warning("execution upstream %d for %s %s", status_code, method, path)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="execution engine error",
+        )
+    if status_code >= 500:
+        # Deliberate refusal, not a fault — log at INFO so it stops paging as an error.
+        logger.info(
+            "execution upstream typed %d (%s) for %s %s",
+            status_code,
+            payload["error"]["code"],
+            method,
+            path,
+        )
+    return JSONResponse(status_code=status_code, content=payload)
+
+
 async def _proxy(request: Request, method: str, path: str) -> JSONResponse:
     """Forward the request (incl. raw body) upstream, mapping failures cleanly."""
     client = _get_client()
@@ -100,12 +175,6 @@ async def _proxy(request: Request, method: str, path: str) -> JSONResponse:
             detail="execution engine unavailable",
         ) from exc
 
-    if upstream.status_code >= 500:
-        logger.warning("execution upstream %d for %s %s", upstream.status_code, method, path)
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="execution engine error",
-        )
     try:
         payload: Any = upstream.json()
     except ValueError as exc:
@@ -113,8 +182,9 @@ async def _proxy(request: Request, method: str, path: str) -> JSONResponse:
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="invalid execution engine response",
         ) from exc
-    # Forward upstream status (incl. typed 4xx envelopes) and body verbatim.
-    return JSONResponse(status_code=upstream.status_code, content=payload)
+    # Forward status + body verbatim, INCLUDING the typed 5xx envelopes; only a
+    # bare (envelope-less) 5xx becomes 502. See _passthrough_or_bad_gateway.
+    return _passthrough_or_bad_gateway(upstream.status_code, payload, method, path)
 
 
 async def _proxy_sse(request: Request, path: str) -> StreamingResponse | JSONResponse:
@@ -170,10 +240,16 @@ async def _proxy_sse(request: Request, path: str) -> StreamingResponse | JSONRes
         ) from exc
 
     if upstream.status_code != 200:
-        # Buffer the (typed-envelope) body and pass status + body through
-        # verbatim — including the engine's 503 ``order_stream_unavailable`` /
-        # 404 ``order_book_unavailable`` envelopes. An unparseable body is the
-        # only thing that maps to 502 (as in :func:`_proxy`).
+        # Buffer the body and route it through the SAME decision the JSON proxy
+        # uses, so the two paths cannot drift again (TK-0451 was exactly that
+        # drift). Typed envelopes — the 503 ``order_stream_unavailable`` / 404
+        # ``order_book_unavailable`` this path always handled correctly — still
+        # pass through verbatim; an unparseable body still maps to 502.
+        #
+        # ⚠️ ONE BEHAVIOUR CHANGE HERE, called out rather than slipped in: a bare
+        # envelope-less 5xx used to pass through with its own status and now
+        # becomes 502, matching the JSON path. A caller cannot tell an engine
+        # crash from a gateway crash otherwise.
         await upstream.aread()
         await upstream.aclose()
         try:
@@ -184,7 +260,7 @@ async def _proxy_sse(request: Request, path: str) -> StreamingResponse | JSONRes
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="invalid execution engine response",
             ) from exc
-        return JSONResponse(status_code=upstream.status_code, content=payload)
+        return _passthrough_or_bad_gateway(upstream.status_code, payload, "GET", path)
 
     async def _iter() -> AsyncIterator[bytes]:
         try:
