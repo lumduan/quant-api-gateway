@@ -336,8 +336,11 @@ Add `"pandas>=2.2"` to `[project] dependencies` (alphabetical position before
 
 - [x] `calculate_weighted_return` with two strategies (60/40 weighting; known inputs) →
       equals the hand-computed expected value (2026-05-15)
-- [x] `calculate_weighted_return` with a single strategy → equals
-      `daily_pnl / total_value`
+- [x] `calculate_weighted_return` with a single strategy → equals that strategy's
+      stored `daily_return`. ⚠️ **Written as `daily_pnl / total_value`, superseded
+      2026-09-01** — the per-strategy input is now `daily_pnl / PRIOR value`. The
+      aggregator itself is UNCHANGED and still correct: it takes a weighted mean over a
+      static `capital_weight`, so correcting the input corrects the output
 - [x] `calculate_weighted_return` with all weights zero → `0.0`
 - [x] `calculate_weighted_return` with `total_value == 0` for one strategy → that
       strategy is excluded, math is correct over the rest

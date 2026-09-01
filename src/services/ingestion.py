@@ -4,7 +4,11 @@ The mapping decisions for Phase 3 are documented in
 ``docs/plans/phase_3_strategy_ingestion/phase_3_strategy_ingestion.md`` §"Design
 decisions". Briefly:
 
-* ``daily_return`` is computed as ``daily_pnl / total_value`` (fractional).
+* ``daily_return`` is ``daily_pnl / PRIOR value`` (fractional), the prior value
+  being the payload equity curve's second-to-last point. Phase 3 originally
+  divided by ``total_value`` — today's NAV — which is systematically biased and
+  one-directional; see :func:`_daily_return`. The legacy basis survives only as
+  a logged fallback for payloads carrying fewer than two equity points.
 * ``cumulative_return`` is derived from the equity curve when it has ≥ 2 points.
 * Raw ``daily_pnl`` plus the equity curve, positions count, type, and extension
   data are preserved inside the ``metadata`` JSONB blob.
@@ -12,12 +16,13 @@ decisions". Briefly:
 
 import json
 import logging
+from collections.abc import Sequence
 from decimal import Decimal
 from typing import Any
 
 import asyncpg
 
-from src.schemas.strategy import StrategyPayload
+from src.schemas.strategy import EquityPoint, StrategyPayload
 from src.services.errors import IngestionPersistError
 from src.services.strategy_report_service import persist_report
 
@@ -39,6 +44,68 @@ ON CONFLICT (time, strategy_id) DO UPDATE SET
 """
 
 
+def _daily_return(
+    *,
+    daily_pnl: float,
+    total_value: float,
+    equity_curve: Sequence[EquityPoint],
+    strategy_id: str,
+) -> float:
+    """Return the day's fractional return: ``daily_pnl / PRIOR value``.
+
+    A return is a change measured against **what you started the period with**.
+    Phase 3 chose ``daily_pnl / total_value`` — dividing by the value you *ended*
+    with — because it made the Phase 4 aggregator's units line up. The units were
+    never the problem; the denominator was. Using today's value makes the quantity
+    systematically biased and **one-directional**: it understates every gain and
+    overstates every loss, because the denominator moves with the numerator.
+
+    Confirmed against csm-set on 2026-09-01 — stored ``-0.03426456`` where the
+    strategy's own engine computed ``-0.03312940`` for the same session. The
+    strategy was right; three months of daily logs carried the discrepancy as an
+    open defect before it was localised to this function.
+
+    The prior value comes from the payload's own equity curve, which is already
+    the source ``cumulative_return`` trusts a few lines below — so this needs no
+    database lookup and no signature change.
+
+    ``daily_pnl`` stays the numerator rather than deriving the whole ratio from
+    the curve (``curve[-1] / curve[-2] - 1``). On a capital-injection day the
+    curve steps by the injected amount, and a ratio taken straight off it books
+    that deposit as a *return*. ``daily_pnl`` is the strategy's own statement of
+    what the book earned, so it keeps flows out of the numerator.
+
+    Args:
+        daily_pnl: The strategy's reported P/L for the session.
+        total_value: Today's NAV — used only by the degraded fallback.
+        equity_curve: The payload's NAV series; ``[-2]`` is the prior value.
+        strategy_id: Named in the warning when the fallback is taken.
+
+    Returns:
+        The fractional daily return, or ``0.0`` when neither basis is available.
+    """
+    if len(equity_curve) >= 2:
+        prior_value = float(equity_curve[-2].value)
+        if prior_value > 0:
+            return daily_pnl / prior_value
+
+    # No prior observation in the payload, so a daily return is not defined from
+    # it. Fall back to the legacy basis rather than silently emitting 0.0 — but
+    # say so, because the value that lands is NOT the same quantity as above and
+    # nothing downstream can tell the two apart once it is a float in a column.
+    if total_value > 0:
+        logger.warning(
+            "daily_return for strategy_id=%s fell back to the LEGACY basis "
+            "(daily_pnl / TODAY's total_value): the payload's equity_curve has %d point(s), "
+            "so no prior value is available. This value is biased and not comparable with "
+            "rows computed against the prior value.",
+            strategy_id,
+            len(equity_curve),
+        )
+        return daily_pnl / total_value
+    return 0.0
+
+
 def _payload_to_row(payload: StrategyPayload) -> dict[str, Any]:
     """Map a validated ``StrategyPayload`` into ``daily_performance`` columns.
 
@@ -58,7 +125,12 @@ def _payload_to_row(payload: StrategyPayload) -> dict[str, Any]:
 
     total_value = float(exposure.total_value)
     daily_pnl = float(metrics.daily_pnl)
-    daily_return = daily_pnl / total_value if total_value > 0 else 0.0
+    daily_return = _daily_return(
+        daily_pnl=daily_pnl,
+        total_value=total_value,
+        equity_curve=metrics.equity_curve,
+        strategy_id=metadata.id,
+    )
 
     cumulative_return: float | None
     if len(metrics.equity_curve) >= 2:

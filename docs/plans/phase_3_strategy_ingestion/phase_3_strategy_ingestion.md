@@ -93,10 +93,24 @@ UNIQUE (time)
 
 ### 1. `daily_pnl` → `daily_return` mapping
 
-**Chosen:** `daily_return = float(daily_pnl) / float(total_value)` when `total_value > 0`,
-else `0.0`. Raw `daily_pnl` is preserved inside the `metadata` JSONB so nothing is lost.
+> 🔴 **SUPERSEDED 2026-09-01 — this decision was WRONG and is no longer what the code does.**
+> The denominator is now the **prior** value (the payload equity curve's `[-2]` point), not
+> today's `total_value`. Dividing by the value you *ended* with is systematically biased and
+> one-directional: it understates every gain and overstates every loss. Caught when csm-set's
+> engine computed `-0.03312940` for 2026-09-01 and this service stored `-0.03426456` for the
+> same session; the strategy was right. The "matches the Phase 4 aggregator" rationale below
+> was about **units**, and units were never the problem — the aggregator takes a weighted mean
+> of per-strategy returns from a static `capital_weight`, so correcting the input corrects it
+> too, with no change needed there. The legacy basis survives **only** as a logged fallback for
+> payloads carrying fewer than two equity points. See `src/services/ingestion.py::_daily_return`.
+> **The paragraph below is retained as the record of what Phase 3 decided, not as current
+> behaviour.**
 
-**Why:** Matches the Phase 4 aggregator formula
+**Chosen (SUPERSEDED):** `daily_return = float(daily_pnl) / float(total_value)` when
+`total_value > 0`, else `0.0`. Raw `daily_pnl` is preserved inside the `metadata` JSONB so
+nothing is lost.
+
+**Why (the reasoning that did not hold):** Matches the Phase 4 aggregator formula
 `(daily_pnl_i / total_value_i) × weight_i`. Storing the raw PnL in `metadata` keeps the
 column NULL-free **and** lets Phase 4 still recover the original value if needed.
 
@@ -244,7 +258,9 @@ class IngestionPersistError(ServiceError): ...
 - `_payload_to_row(payload) -> dict[str, Any]` — pure mapping function
   - `time` ← `payload.strategy_metadata.last_updated`
   - `strategy_id` ← `payload.strategy_metadata.id`
-  - `daily_return` ← `float(daily_pnl)/float(total_value)` if `total_value > 0` else `0.0`
+  - `daily_return` ← ⚠️ **SUPERSEDED 2026-09-01** — now `daily_pnl / equity_curve[-2].value`
+    (the PRIOR value) when the curve has ≥2 points; the form below is the logged fallback only.
+    ~~`float(daily_pnl)/float(total_value)` if `total_value > 0` else `0.0`~~
   - `cumulative_return` ← derived when `len(equity_curve) ≥ 2`, else `None`
   - `total_value`, `cash_balance`, `max_drawdown`, `sharpe_ratio` ← `float(...)`
   - `metadata` ← `json.dumps(...)` with Decimal→str (lossless preservation of
