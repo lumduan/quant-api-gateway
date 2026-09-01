@@ -607,7 +607,12 @@ def _envelope(code: str, message: str = "x") -> dict[str, Any]:
         ("kill_switch_engaged", 503),
         ("broker_circuit_open", 503),
         ("order_stream_unavailable", 503),
-        ("liberator_positions_uncaptured", 501),
+        # ↻ 2026-09-01: was ``liberator_positions_uncaptured``. Same 501 coverage, but
+        # that code is NEVER RAISED any more — liberator positions were implemented
+        # against the first populated capture on 2026-08-28, and the exception class
+        # survives unraised. A sample that cannot occur still exercises the mechanism,
+        # but it teaches a reader a scenario that does not exist; this one fires.
+        ("streaming_pro_positions_uncaptured", 501),
     ],
 )
 async def test_a_typed_5xx_envelope_passes_through_verbatim(
@@ -820,6 +825,148 @@ async def test_an_UNREADABLE_account_error_is_not_softened_into_a_zero(
     )
     assert response.status_code == 404
     assert response.json()["error"] == "streaming_pro_account_unavailable"
+
+
+# ------------------------------------------- positions (TK-0479)
+
+
+async def test_execution_account_positions_proxied(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET /accounts/{account}/positions reaches the engine with its extra segment.
+
+    Before TK-0479 this route did not exist here: the gateway proxied the balance
+    and open-orders reads and not this one, so a gateway-only caller could not
+    read positions AT ALL — and the failure looked exactly like a capability the
+    platform lacked rather than one that was merely unrouted. On 2026-09-01 a
+    consumer read it that way and began drafting a request for an engine route
+    that had been live since 2026-08-27/28.
+    """
+    body = {
+        "positions": [
+            {
+                "account": "70000007",
+                "market": "TFEX",
+                "symbol": "XYZZ26",
+                "net_qty": 1,
+                "side": "SELL",
+            }
+        ]
+    }
+    fake = _FakeUpstream(response=httpx.Response(200, json=body))
+    _patch_upstream(monkeypatch, fake)
+    response = await async_client.get(
+        "/api/v2/engines/execution/accounts/70000007/positions",
+        params={"broker": "liberator"},
+        headers={"X-API-Key": "k123"},
+    )
+    assert response.status_code == 200
+    assert response.json() == body
+    call = fake.calls[0]
+    assert call["method"] == "GET"
+    # The extra segment must survive — the 2-segment balance route must not swallow it.
+    assert call["path"] == "/accounts/70000007/positions"
+    assert call["params"] == {"broker": "liberator"}
+    assert call["headers"]["X-API-Key"] == "k123"
+
+
+async def test_the_501_uncaptured_REFUSAL_survives_the_hop_with_its_code(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """🔴 The acceptance criterion of TK-0479, and the reason it is not a one-liner.
+
+    ``streaming_pro_positions_uncaptured`` is a **deliberate refusal**: the venue's
+    element schema has never been observed non-empty, so the engine refuses rather
+    than inventing field names. A caller must be able to tell that apart from "the
+    engine fell over", which means the 501 AND its typed code both have to arrive.
+
+    Flattening it to a bare 502 is the TK-0451 defect. Converting it to ``200 []``
+    would be strictly worse — it would report an account that HOLDS something as
+    flat, which is the single failure mode the engine's positions route was rebuilt
+    to remove.
+    """
+    fake = _FakeUpstream(
+        response=httpx.Response(
+            501,
+            json={
+                "error": {
+                    "code": "streaming_pro_positions_uncaptured",
+                    "message": "element schema never observed - refusing to invent fields",
+                    "detail": {"rows": 2},
+                }
+            },
+        )
+    )
+    _patch_upstream(monkeypatch, fake)
+    response = await async_client.get(
+        "/api/v2/engines/execution/accounts/0500009/positions",
+        params={"broker": "streaming_pro"},
+    )
+    assert response.status_code == 501, "a typed 5xx must NOT be flattened to 502"
+    assert response.json()["error"]["code"] == "streaming_pro_positions_uncaptured"
+    assert response.json()["error"]["detail"] == {"rows": 2}
+
+
+async def test_an_ENGINE_FAULT_does_not_become_an_empty_position_list(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half: a genuine fault must not read as "this account is flat".
+
+    An envelope-less 5xx is the engine falling over, and it becomes 502 — never
+    ``200 {"positions": []}``. Asserted separately from the 501 above because the
+    two failures are handled by DIFFERENT branches of
+    ``_passthrough_or_bad_gateway``, and a test that only exercised the typed one
+    would leave the bare one unpinned.
+    """
+    fake = _FakeUpstream(response=httpx.Response(500, json={"detail": "boom"}))
+    _patch_upstream(monkeypatch, fake)
+    response = await async_client.get(
+        "/api/v2/engines/execution/accounts/70000007/positions",
+        params={"broker": "liberator"},
+    )
+    assert response.status_code == 502
+    assert "positions" not in response.json()
+
+
+async def test_a_genuinely_EMPTY_book_is_forwarded_as_empty_not_as_an_error(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Positive control — the guards above must not make every empty answer a failure.
+
+    A flat account legitimately answers ``{"positions": []}`` with 200, and that
+    has to reach the caller unchanged. Without this, a proxy that turned every
+    empty list into an error would pass the two tests above while being useless.
+    """
+    fake = _FakeUpstream(response=httpx.Response(200, json={"positions": []}))
+    _patch_upstream(monkeypatch, fake)
+    response = await async_client.get(
+        "/api/v2/engines/execution/accounts/0500009/positions",
+        params={"broker": "streaming_pro"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"positions": []}
+
+
+async def test_positions_proxy_INVENTS_NO_CREDENTIAL(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Holdings are owner-mode on the engine; the gateway must stay a pure hop.
+
+    Same property the balance route pins, asserted for this route too rather than
+    assumed to be inherited: they are separate handlers, and a future edit could
+    add a key to one and not the other. Positions are the more sensitive read of
+    the two.
+    """
+    fake = _FakeUpstream(
+        response=httpx.Response(401, json={"detail": "invalid or missing X-API-Key"})
+    )
+    _patch_upstream(monkeypatch, fake)
+    response = await async_client.get(
+        "/api/v2/engines/execution/accounts/0500009/positions",
+        params={"broker": "streaming_pro"},
+    )
+    assert response.status_code == 401
+    assert "X-API-Key" not in fake.calls[0]["headers"]
 
 
 async def test_a_null_field_stays_null_and_is_never_coerced_to_zero(

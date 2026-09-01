@@ -46,6 +46,7 @@ Proxied surface:
 * ``GET /order-book/{symbol}/stream`` — **SSE** order-book updates.
 * ``GET /accounts/{account}`` — normalized balance / buying power (``?broker=``).
 * ``GET /accounts/{account}/open-orders`` — venue-truth resting orders (``?broker=``).
+* ``GET /accounts/{account}/positions`` — venue-truth holdings (``?broker=``).
 
 SSE pass-through is unbuffered (chunked transfer; the httpx read timeout is
 disabled per-stream so an idle keep-alive-only stream is not killed); JSON
@@ -129,7 +130,18 @@ def _passthrough_or_bad_gateway(
     * **Typed envelope** — forwarded verbatim at the engine's own status. A
       caller can then distinguish ``kill_switch_engaged`` (503, deliberate halt —
       do NOT retry) from ``broker_circuit_open`` (503, venue trouble) from
-      ``liberator_positions_uncaptured`` (501, will never work — stop asking).
+      ``streaming_pro_positions_uncaptured`` (501, the venue's element schema
+      has never been observed — not a fault, and not retryable until it is).
+
+      ↻ **This example named ``liberator_positions_uncaptured`` and described it
+      as "will never work — stop asking" until 2026-09-01. Both halves are now
+      false.** The blocker was a missing element-schema capture, and the capture
+      was taken 2026-08-28 when real positions were first held: liberator
+      positions parse on SET *and* TFEX today. The engine's exception class
+      survives but is **never raised**. The streaming_pro code above is the one
+      that still fires, and it is the better illustration anyway — it shows a 501
+      that is a *deliberate refusal*, which is the distinction this rule exists
+      to preserve.
     * **Bare 5xx with no envelope** — ``502``. The engine genuinely failed, and
       502 attributes that to the upstream; forwarding a bare ``500`` would make
       the *gateway* look like the thing that broke.
@@ -381,6 +393,39 @@ async def execution_account_open_orders(account: str, request: Request) -> JSONR
     relax that (see the module docstring).
     """
     return await _proxy(request, "GET", f"/accounts/{account}/open-orders")
+
+
+@router.get(
+    "/accounts/{account}/positions",
+    summary="Venue-truth holdings for one account (proxied; ``?broker=`` required)",
+)
+async def execution_account_positions(account: str, request: Request) -> JSONResponse:
+    """Proxy the venue-truth positions read.
+
+    🔴 **Two engine guarantees have to survive this hop, and a "helpful" proxy
+    would destroy both.**
+
+    **An empty list means the account holds nothing** — and it can only mean that
+    because every engine path unable to answer *raises* instead. A proxy that
+    caught an upstream failure and substituted ``[]`` would report a holding
+    account as flat, and *flat* is a plausible answer a caller will act on. This
+    proxy interprets nothing: ``_proxy`` forwards status and payload verbatim.
+
+    **A 501 is a refusal, not a fault.** ``streaming_pro_positions_uncaptured``
+    means the venue's element schema has never been observed, so the engine
+    refuses rather than inventing field names. It is a typed envelope, so
+    :func:`_passthrough_or_bad_gateway` forwards it intact rather than flattening
+    it to a bare 502 — the TK-0451 defect, fixed 2026-08-27 and pinned by tests
+    here.
+
+    ⚠️ Coverage is asymmetric by venue, not by omission: ``liberator`` parses SET
+    and TFEX; ``streaming_pro`` parses SET, answers ``[]`` for a *flat* TFEX
+    account, and 501s for one that holds something.
+
+    ``side: null`` means *the venue did not distinguish* — never *flat*, never
+    *long*. SET equities cannot be short and neither venue sends a side for them.
+    """
+    return await _proxy(request, "GET", f"/accounts/{account}/positions")
 
 
 @router.get(
