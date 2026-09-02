@@ -62,16 +62,100 @@ def test_payload_to_row_basic_fields() -> None:
     assert row["sharpe_ratio"] == pytest.approx(1.85)
 
 
-def test_payload_to_row_daily_return_formula() -> None:
+def test_payload_to_row_daily_return_divides_by_the_PRIOR_value() -> None:
+    """A return is measured against what the period STARTED with.
+
+    The default fixture curve is [1,035,000 -> 1,050,000], so the prior value is
+    1,035,000 and `total_value` (today) is 1,050,000. The two denominators give
+    visibly different answers, which is the whole point of the fix.
+    """
     row = ingest_mod._payload_to_row(_payload(daily_pnl="15000.50", total_value="1050000.00"))
-    expected = 15000.50 / 1050000.00
-    assert row["daily_return"] == pytest.approx(expected, rel=1e-9)
+    assert row["daily_return"] == pytest.approx(15000.50 / 1035000.00, rel=1e-12)
+
+
+def test_payload_to_row_daily_return_is_NOT_the_legacy_today_denominator() -> None:
+    """Positive control for the bug itself: the old value must be unreachable.
+
+    Phase 3 stored `daily_pnl / total_value`. On csm-set 2026-09-01 that put
+    -0.03426456 in the column where the strategy's own engine said -0.03312940.
+    """
+    row = ingest_mod._payload_to_row(_payload(daily_pnl="15000.50", total_value="1050000.00"))
+    legacy = 15000.50 / 1050000.00
+    assert row["daily_return"] != pytest.approx(legacy, rel=1e-9)
+
+
+def test_daily_return_understates_gains_and_overstates_losses() -> None:
+    """The legacy bias is one-directional, which is why it never looked like noise."""
+    gain = ingest_mod._daily_return(
+        daily_pnl=15000.0,
+        total_value=1015000.0,
+        equity_curve=[EquityPoint(date="2026-05-13", value=Decimal("1000000"))] * 2,
+        strategy_id="s",
+    )
+    assert gain > 15000.0 / 1015000.0, "legacy understates a gain"
+    loss = ingest_mod._daily_return(
+        daily_pnl=-15000.0,
+        total_value=985000.0,
+        equity_curve=[EquityPoint(date="2026-05-13", value=Decimal("1000000"))] * 2,
+        strategy_id="s",
+    )
+    assert loss > -15000.0 / 985000.0, "legacy overstates a loss"
 
 
 def test_payload_to_row_total_value_zero_yields_zero_return() -> None:
-    payload = _payload(daily_pnl="0.00", total_value="0.00")
+    payload = _payload(daily_pnl="0.00", total_value="0.00", equity_curve=[("2026-05-14", "0.00")])
     row = ingest_mod._payload_to_row(payload)
     assert row["daily_return"] == 0.0
+
+
+def test_daily_return_falls_back_to_the_legacy_basis_when_no_prior_point() -> None:
+    """A one-point curve carries no yesterday; behaviour is unchanged, not silently zeroed."""
+    row = ingest_mod._payload_to_row(
+        _payload(
+            daily_pnl="15000.50",
+            total_value="1050000.00",
+            equity_curve=[("2026-05-14", "1050000.00")],
+        )
+    )
+    assert row["daily_return"] == pytest.approx(15000.50 / 1050000.00, rel=1e-9)
+
+
+def test_daily_return_fallback_WARNS_and_names_the_strategy(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The degraded value is not the same quantity, so it must not land silently."""
+    with caplog.at_level("WARNING"):
+        ingest_mod._payload_to_row(
+            _payload(strategy_id="lonely-curve", equity_curve=[("2026-05-14", "1050000.00")])
+        )
+    assert "lonely-curve" in caplog.text
+    assert "LEGACY basis" in caplog.text
+
+
+def test_daily_return_ignores_a_non_positive_prior_value() -> None:
+    """A zero prior value would divide by zero; fall back rather than raise."""
+    assert ingest_mod._daily_return(
+        daily_pnl=100.0,
+        total_value=1000.0,
+        equity_curve=[
+            EquityPoint(date="2026-05-13", value=Decimal("0")),
+            EquityPoint(date="2026-05-14", value=Decimal("1000")),
+        ],
+        strategy_id="s",
+    ) == pytest.approx(0.1)
+
+
+def test_daily_return_reproduces_the_csm_set_2026_09_01_session() -> None:
+    """The real numbers that exposed this, end to end."""
+    assert ingest_mod._daily_return(
+        daily_pnl=-43649.0,
+        total_value=1273881.7,
+        equity_curve=[
+            EquityPoint(date="2026-08-31", value=Decimal("1317530.70")),
+            EquityPoint(date="2026-09-01", value=Decimal("1273881.70")),
+        ],
+        strategy_id="csm-set",
+    ) == pytest.approx(-0.03312939880641871, rel=1e-12)
 
 
 def test_payload_to_row_cumulative_return_two_points() -> None:

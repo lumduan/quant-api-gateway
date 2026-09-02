@@ -156,7 +156,7 @@ come from environment variables or `.env`. Access via `get_settings()` (lazy, ca
 |---|---|---|
 | `strategy_id` | `TEXT` | Strategy identifier |
 | `total_value` | `DOUBLE PRECISION` | Total portfolio value |
-| `daily_return` | `DOUBLE PRECISION` | Computed as daily_pnl / total_value |
+| `daily_return` | `DOUBLE PRECISION` | `daily_pnl / PRIOR value` (equity curve `[-2]`). ⚠️ Rows written **before 2026-09-01** are on the superseded `daily_pnl / total_value` basis — the series is mixed |
 | `max_drawdown` | `DOUBLE PRECISION` | Maximum drawdown (negative) |
 | `sharpe_ratio` | `DOUBLE PRECISION` | Sharpe ratio |
 | `time` | `TIMESTAMPTZ` | Report timestamp (UTC) |
@@ -328,7 +328,10 @@ Pure functions — no I/O, no async.
 ### Ingestion (`ingestion.py`)
 **`persist_daily_report(payload, pool) -> None`**
 - Converts `StrategyPayload` to a `daily_performance` row
-- Computes `daily_return = daily_pnl / total_value`
+- Computes `daily_return = daily_pnl / equity_curve[-2].value` — the **prior** value.
+  ⚠️ Superseded 2026-09-01; `daily_pnl / total_value` (today's NAV) is biased one-directionally
+  and survives only as a logged fallback when the curve has <2 points. See
+  `_daily_return`'s docstring
 - Computes `cumulative_return` from first/last equity curve points
 - INSERT with ON CONFLICT for idempotent upsert
 - Stores raw `daily_pnl` and `equity_curve` in metadata JSONB
