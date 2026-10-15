@@ -104,14 +104,23 @@ def test_production_strategies_json_parses_with_expected_entries() -> None:
     """The repo's production ``strategies.json`` must always parse cleanly
     and contain the registered strategies. Guards against typos / missing
     fields when adding a new strategy.
+
+    Until 2026-10-14 this asserted ``tfex-s50-multi-tf-swing`` was registered.
+    That strategy was deregistered in f2f81c2 (2026-09-04, decommissioned; its
+    repo is archived), and this test failed on ``main`` from then on. The
+    per-entry checks now cover ``cash-and-carry-set-tfex``, the registry's
+    paper-only entry.
     """
     repo_root = Path(__file__).resolve().parents[2]
     reg = registry_mod.load_registry(repo_root / "strategies.json")
     ids = {s.id for s in reg.strategies}
     assert "csm-set" in ids
-    assert "tfex-s50-multi-tf-swing" in ids
-    tfex = reg.by_id("tfex-s50-multi-tf-swing")
-    assert tfex is not None
-    assert tfex.type == "TFEX_DERIVATIVES"
-    assert tfex.service_url == "http://quant-tfex-s50-multi-tf-swing:8000"
-    assert tfex.active is False  # paper-trading gate, not active yet
+    assert "cash-and-carry-set-tfex" in ids
+    carry = reg.by_id("cash-and-carry-set-tfex")
+    assert carry is not None
+    assert carry.type == "ARBITRAGE_BASIS"
+    assert carry.service_url == "http://quant-cash-and-carry-set-tfex:8000"
+    assert carry.active is False  # paper-only, excluded from portfolio aggregation
+    # Deregistered on purpose (f2f81c2): its container is gone, so re-adding the
+    # entry (a revert, say) would register a service nothing answers for.
+    assert "tfex-s50-multi-tf-swing" not in ids
